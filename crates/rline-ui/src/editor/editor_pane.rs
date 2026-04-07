@@ -204,6 +204,8 @@ impl EditorPane {
             .notebook
             .append_page(tab.widget(), Some(tab.tab_label()));
         self.notebook.set_tab_reorderable(tab.widget(), true);
+        self.wire_tab_close_btn(tab.close_btn(), page_idx);
+        self.wire_tab_context_menu(tab.tab_label(), page_idx);
 
         let idx = page_idx as usize;
         self.tabs.borrow_mut().push(TabKind::Editor(tab));
@@ -234,6 +236,8 @@ impl EditorPane {
             .notebook
             .append_page(tab.widget(), Some(tab.tab_label()));
         self.notebook.set_tab_reorderable(tab.widget(), true);
+        self.wire_tab_close_btn(tab.close_btn(), page_idx);
+        self.wire_tab_context_menu(tab.tab_label(), page_idx);
 
         let idx = page_idx as usize;
         self.tabs.borrow_mut().push(TabKind::Diff(tab));
@@ -282,95 +286,129 @@ impl EditorPane {
     /// Close the currently focused editor tab.
     pub fn close_current_tab(&self) {
         if let Some(page_num) = self.notebook.current_page() {
-            let idx = page_num as usize;
-            let tabs = self.tabs.borrow();
-            if let Some(TabKind::Editor(tab)) = tabs.get(idx) {
-                if tab.is_modified() {
-                    // Show save confirmation dialog
-                    let notebook = self.notebook.clone();
-                    let tabs_rc = self.tabs.clone();
-                    let path_map = self.path_to_index.clone();
-                    let mru_rc = self.mru.clone();
-                    let tab_clone = tab.clone();
-                    let on_removed = self.on_tab_removed.clone();
+            self.close_tab_at(page_num);
+        }
+    }
 
-                    let dialog = gtk4::AlertDialog::builder()
-                        .message("Save changes?")
-                        .detail(
-                            "This file has unsaved changes. Do you want to save before closing?",
-                        )
-                        .buttons(["Save", "Discard", "Cancel"])
-                        .default_button(0)
-                        .cancel_button(2)
-                        .modal(true)
-                        .build();
+    /// Close the tab at the given notebook page index, prompting to save if
+    /// the tab contains unsaved changes.
+    pub fn close_tab_at(&self, page_num: u32) {
+        let idx = page_num as usize;
+        let tabs = self.tabs.borrow();
+        if let Some(TabKind::Editor(tab)) = tabs.get(idx) {
+            if tab.is_modified() {
+                let notebook = self.notebook.clone();
+                let tabs_rc = self.tabs.clone();
+                let path_map = self.path_to_index.clone();
+                let mru_rc = self.mru.clone();
+                let tab_clone = tab.clone();
+                let on_removed = self.on_tab_removed.clone();
 
-                    // Get the window from the notebook
-                    let window = notebook.root().and_downcast::<gtk4::Window>();
-                    dialog.choose(
-                        window.as_ref(),
-                        gio::Cancellable::NONE,
-                        glib::clone!(
-                            #[strong]
-                            notebook,
-                            #[strong]
-                            tabs_rc,
-                            #[strong]
-                            path_map,
-                            #[strong]
-                            mru_rc,
-                            #[strong]
-                            tab_clone,
-                            #[strong]
-                            on_removed,
-                            move |result| {
-                                match result {
-                                    Ok(0) => {
-                                        // Save then close
-                                        if let Err(e) = tab_clone.save() {
-                                            tracing::error!("failed to save: {e}");
-                                            return;
-                                        }
-                                        Self::remove_tab(
-                                            &notebook,
-                                            &tabs_rc,
-                                            &path_map,
-                                            &mru_rc,
-                                            &on_removed,
-                                            page_num,
-                                        );
+                let dialog = gtk4::AlertDialog::builder()
+                    .message("Save changes?")
+                    .detail("This file has unsaved changes. Do you want to save before closing?")
+                    .buttons(["Save", "Discard", "Cancel"])
+                    .default_button(0)
+                    .cancel_button(2)
+                    .modal(true)
+                    .build();
+
+                let window = notebook.root().and_downcast::<gtk4::Window>();
+                dialog.choose(
+                    window.as_ref(),
+                    gio::Cancellable::NONE,
+                    glib::clone!(
+                        #[strong]
+                        notebook,
+                        #[strong]
+                        tabs_rc,
+                        #[strong]
+                        path_map,
+                        #[strong]
+                        mru_rc,
+                        #[strong]
+                        tab_clone,
+                        #[strong]
+                        on_removed,
+                        move |result| {
+                            match result {
+                                Ok(0) => {
+                                    if let Err(e) = tab_clone.save() {
+                                        tracing::error!("failed to save: {e}");
+                                        return;
                                     }
-                                    Ok(1) => {
-                                        // Discard — just close
-                                        Self::remove_tab(
-                                            &notebook,
-                                            &tabs_rc,
-                                            &path_map,
-                                            &mru_rc,
-                                            &on_removed,
-                                            page_num,
-                                        );
-                                    }
-                                    _ => {
-                                        // Cancel — do nothing
-                                    }
+                                    Self::remove_tab(
+                                        &notebook,
+                                        &tabs_rc,
+                                        &path_map,
+                                        &mru_rc,
+                                        &on_removed,
+                                        page_num,
+                                    );
                                 }
+                                Ok(1) => {
+                                    Self::remove_tab(
+                                        &notebook,
+                                        &tabs_rc,
+                                        &path_map,
+                                        &mru_rc,
+                                        &on_removed,
+                                        page_num,
+                                    );
+                                }
+                                _ => {}
                             }
-                        ),
-                    );
-                    return;
-                }
+                        }
+                    ),
+                );
+                return;
             }
-            // Diff tabs and unmodified editor tabs close immediately.
-            drop(tabs);
-            Self::remove_tab(
-                &self.notebook,
-                &self.tabs,
-                &self.path_to_index,
-                &self.mru,
-                &self.on_tab_removed,
-                page_num,
-            );
+        }
+        drop(tabs);
+        Self::remove_tab(
+            &self.notebook,
+            &self.tabs,
+            &self.path_to_index,
+            &self.mru,
+            &self.on_tab_removed,
+            page_num,
+        );
+    }
+
+    /// Close all tabs to the right of the given page index.
+    pub fn close_tabs_right_of(&self, page_num: u32) {
+        let total = self.notebook.n_pages();
+        // Close from rightmost to avoid index shifting issues; note that each
+        // close_tab_at for modified files is async (save dialog), so only
+        // unmodified/diff tabs close synchronously.  We iterate in reverse to
+        // keep indices stable for the synchronous removals.
+        for i in (page_num + 1..total).rev() {
+            self.close_tab_at(i);
+        }
+    }
+
+    /// Close all tabs to the left of the given page index.
+    pub fn close_tabs_left_of(&self, page_num: u32) {
+        for _ in 0..page_num {
+            // Always close index 0 because each removal shifts tabs left.
+            self.close_tab_at(0);
+        }
+    }
+
+    /// Close all tabs except the one at the given page index.
+    pub fn close_tabs_except(&self, page_num: u32) {
+        // Close right first (indices remain stable), then left.
+        self.close_tabs_right_of(page_num);
+        // After right tabs are closed, the target tab's index may have
+        // changed — but since we only closed tabs to the right, it hasn't.
+        self.close_tabs_left_of(page_num);
+    }
+
+    /// Close all tabs.
+    pub fn close_all_tabs(&self) {
+        let total = self.notebook.n_pages();
+        for _ in 0..total {
+            self.close_tab_at(0);
         }
     }
 
@@ -434,6 +472,85 @@ impl EditorPane {
     /// The container widget to embed in the layout.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
+    }
+
+    /// Wire a close button to close its containing tab. Because tabs can be
+    /// reordered, we look up the page number dynamically from the widget.
+    fn wire_tab_close_btn(&self, btn: &gtk4::Button, initial_page: u32) {
+        let pane = self.clone();
+        let notebook = self.notebook.clone();
+        let page_widget = notebook.nth_page(Some(initial_page));
+
+        btn.connect_clicked(move |_| {
+            // Resolve current page index from widget (handles reorder).
+            if let Some(pn) = page_widget.as_ref().and_then(|w| notebook.page_num(w)) {
+                pane.close_tab_at(pn);
+            }
+        });
+    }
+
+    /// Attach a right-click context menu to a tab label with Close All, Close
+    /// Others, Close All Left, and Close All Right actions.
+    fn wire_tab_context_menu(&self, tab_label: &gtk4::Box, initial_page: u32) {
+        let pane = self.clone();
+        let notebook = self.notebook.clone();
+        let page_widget = notebook.nth_page(Some(initial_page));
+
+        let gesture = gtk4::GestureClick::builder()
+            .button(3) // right-click
+            .build();
+
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            let Some(pn) = page_widget.as_ref().and_then(|w| notebook.page_num(w)) else {
+                return;
+            };
+            let Some(widget) = gesture.widget() else {
+                return;
+            };
+
+            let menu = gio::Menu::new();
+            menu.append(Some("Close"), Some("tab.close"));
+            menu.append(Some("Close All"), Some("tab.close-all"));
+            menu.append(Some("Close Others"), Some("tab.close-others"));
+            menu.append(Some("Close All Left"), Some("tab.close-left"));
+            menu.append(Some("Close All Right"), Some("tab.close-right"));
+
+            let action_group = gio::SimpleActionGroup::new();
+
+            let p = pane.clone();
+            let close = gio::SimpleAction::new("close", None);
+            close.connect_activate(move |_, _| p.close_tab_at(pn));
+            action_group.add_action(&close);
+
+            let p = pane.clone();
+            let close_all = gio::SimpleAction::new("close-all", None);
+            close_all.connect_activate(move |_, _| p.close_all_tabs());
+            action_group.add_action(&close_all);
+
+            let p = pane.clone();
+            let close_others = gio::SimpleAction::new("close-others", None);
+            close_others.connect_activate(move |_, _| p.close_tabs_except(pn));
+            action_group.add_action(&close_others);
+
+            let p = pane.clone();
+            let close_left = gio::SimpleAction::new("close-left", None);
+            close_left.connect_activate(move |_, _| p.close_tabs_left_of(pn));
+            action_group.add_action(&close_left);
+
+            let p = pane.clone();
+            let close_right = gio::SimpleAction::new("close-right", None);
+            close_right.connect_activate(move |_, _| p.close_tabs_right_of(pn));
+            action_group.add_action(&close_right);
+
+            widget.insert_action_group("tab", Some(&action_group));
+
+            let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+            popover.set_parent(&widget);
+            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        });
+
+        tab_label.add_controller(gesture);
     }
 
     fn remove_tab(

@@ -9,7 +9,8 @@ use vte4::prelude::*;
 #[derive(Debug, Clone)]
 pub struct TerminalTab {
     terminal: vte4::Terminal,
-    label: gtk4::Label,
+    tab_label: gtk4::Box,
+    close_btn: gtk4::Button,
 }
 
 impl TerminalTab {
@@ -27,7 +28,17 @@ impl TerminalTab {
         // Apply font
         Self::apply_font(&terminal, font_family, font_size);
 
-        let label = gtk4::Label::new(Some(&format!("Terminal {index}")));
+        let name_label = gtk4::Label::new(Some(&format!("Terminal {index}")));
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.add_css_class("circular");
+        close_btn.set_valign(gtk4::Align::Center);
+        close_btn.set_has_frame(false);
+        close_btn.set_margin_start(2);
+
+        let tab_label = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        tab_label.append(&name_label);
+        tab_label.append(&close_btn);
 
         // Determine working directory
         let cwd = working_dir
@@ -56,7 +67,11 @@ impl TerminalTab {
             },
         );
 
-        Self { terminal, label }
+        Self {
+            terminal,
+            tab_label,
+            close_btn,
+        }
     }
 
     /// The terminal widget.
@@ -65,8 +80,13 @@ impl TerminalTab {
     }
 
     /// The tab label widget.
-    pub fn tab_label(&self) -> &gtk4::Label {
-        &self.label
+    pub fn tab_label(&self) -> &gtk4::Box {
+        &self.tab_label
+    }
+
+    /// The close button in the tab label.
+    pub fn close_btn(&self) -> &gtk4::Button {
+        &self.close_btn
     }
 
     /// Apply font family and size to the terminal widget.

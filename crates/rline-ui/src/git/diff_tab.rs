@@ -49,6 +49,8 @@ pub struct DiffTab {
     right_buffer: sourceview5::Buffer,
     /// Tab label widget.
     tab_label: gtk4::Box,
+    /// Close button in the tab label.
+    close_btn: gtk4::Button,
     /// The file path this diff is for.
     file_path: PathBuf,
 }
@@ -127,14 +129,21 @@ impl DiffTab {
         // Synchronize scrolling between the two views.
         Self::sync_scrolling(&left_scrolled, &right_scrolled);
 
-        // Build tab label.
+        // Build tab label with close button.
         let filename = file_path
             .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".to_owned());
         let label = gtk4::Label::new(Some(&format!("{filename} [diff]")));
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.add_css_class("circular");
+        close_btn.set_valign(gtk4::Align::Center);
+        close_btn.set_has_frame(false);
+        close_btn.set_margin_start(2);
         let tab_label = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         tab_label.append(&label);
+        tab_label.append(&close_btn);
 
         Self {
             container,
@@ -143,6 +152,7 @@ impl DiffTab {
             left_buffer,
             right_buffer,
             tab_label,
+            close_btn,
             file_path: file_path.to_path_buf(),
         }
     }
@@ -367,6 +377,11 @@ impl DiffTab {
     /// The tab label widget.
     pub fn tab_label(&self) -> &gtk4::Box {
         &self.tab_label
+    }
+
+    /// The close button in the tab label.
+    pub fn close_btn(&self) -> &gtk4::Button {
+        &self.close_btn
     }
 
     /// Apply updated settings to both views.

@@ -82,7 +82,49 @@ impl TerminalPane {
             .build();
 
         let page_num = self.notebook.append_page(&scrolled, Some(tab.tab_label()));
+        self.wire_tab_close_btn(tab.close_btn(), page_num);
+        self.wire_tab_context_menu(tab.tab_label(), page_num);
         self.notebook.set_current_page(Some(page_num));
+    }
+
+    /// Close the terminal tab at the given page index.
+    pub fn close_tab_at(&self, page_num: u32) {
+        self.notebook.remove_page(Some(page_num));
+    }
+
+    /// Close all terminal tabs.
+    pub fn close_all_tabs(&self) {
+        let total = self.notebook.n_pages();
+        for _ in 0..total {
+            self.notebook.remove_page(Some(0));
+        }
+    }
+
+    /// Close all tabs except the one at the given page index.
+    pub fn close_tabs_except(&self, page_num: u32) {
+        // Close right first (stable indices), then left.
+        let total = self.notebook.n_pages();
+        for i in (page_num + 1..total).rev() {
+            self.notebook.remove_page(Some(i));
+        }
+        for _ in 0..page_num {
+            self.notebook.remove_page(Some(0));
+        }
+    }
+
+    /// Close all tabs to the left of the given page index.
+    pub fn close_tabs_left_of(&self, page_num: u32) {
+        for _ in 0..page_num {
+            self.notebook.remove_page(Some(0));
+        }
+    }
+
+    /// Close all tabs to the right of the given page index.
+    pub fn close_tabs_right_of(&self, page_num: u32) {
+        let total = self.notebook.n_pages();
+        for i in (page_num + 1..total).rev() {
+            self.notebook.remove_page(Some(i));
+        }
     }
 
     /// Set the default working directory for new terminals.
@@ -130,5 +172,78 @@ impl TerminalPane {
     /// The container widget.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
+    }
+
+    /// Wire a close button to close its containing terminal tab.
+    fn wire_tab_close_btn(&self, btn: &gtk4::Button, initial_page: u32) {
+        let notebook = self.notebook.clone();
+        let page_widget = notebook.nth_page(Some(initial_page));
+
+        btn.connect_clicked(move |_| {
+            if let Some(pn) = page_widget.as_ref().and_then(|w| notebook.page_num(w)) {
+                notebook.remove_page(Some(pn));
+            }
+        });
+    }
+
+    /// Attach a right-click context menu to a terminal tab label.
+    fn wire_tab_context_menu(&self, tab_label: &gtk4::Box, initial_page: u32) {
+        let pane = self.clone();
+        let notebook = self.notebook.clone();
+        let page_widget = notebook.nth_page(Some(initial_page));
+
+        let gesture = gtk4::GestureClick::builder().button(3).build();
+
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            let Some(pn) = page_widget.as_ref().and_then(|w| notebook.page_num(w)) else {
+                return;
+            };
+            let Some(widget) = gesture.widget() else {
+                return;
+            };
+
+            let menu = gio::Menu::new();
+            menu.append(Some("Close"), Some("tab.close"));
+            menu.append(Some("Close All"), Some("tab.close-all"));
+            menu.append(Some("Close Others"), Some("tab.close-others"));
+            menu.append(Some("Close All Left"), Some("tab.close-left"));
+            menu.append(Some("Close All Right"), Some("tab.close-right"));
+
+            let action_group = gio::SimpleActionGroup::new();
+
+            let p = pane.clone();
+            let close = gio::SimpleAction::new("close", None);
+            close.connect_activate(move |_, _| p.close_tab_at(pn));
+            action_group.add_action(&close);
+
+            let p = pane.clone();
+            let close_all = gio::SimpleAction::new("close-all", None);
+            close_all.connect_activate(move |_, _| p.close_all_tabs());
+            action_group.add_action(&close_all);
+
+            let p = pane.clone();
+            let close_others = gio::SimpleAction::new("close-others", None);
+            close_others.connect_activate(move |_, _| p.close_tabs_except(pn));
+            action_group.add_action(&close_others);
+
+            let p = pane.clone();
+            let close_left = gio::SimpleAction::new("close-left", None);
+            close_left.connect_activate(move |_, _| p.close_tabs_left_of(pn));
+            action_group.add_action(&close_left);
+
+            let p = pane.clone();
+            let close_right = gio::SimpleAction::new("close-right", None);
+            close_right.connect_activate(move |_, _| p.close_tabs_right_of(pn));
+            action_group.add_action(&close_right);
+
+            widget.insert_action_group("tab", Some(&action_group));
+
+            let popover = gtk4::PopoverMenu::from_model(Some(&menu));
+            popover.set_parent(&widget);
+            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        });
+
+        tab_label.add_controller(gesture);
     }
 }

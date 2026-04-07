@@ -23,10 +23,12 @@ pub struct EditorTab {
     view: sourceview5::View,
     /// The sourceview5 buffer.
     buffer: sourceview5::Buffer,
-    /// The tab label box (icon + filename + modified indicator).
+    /// The tab label box (icon + filename + close button).
     tab_label: gtk4::Box,
     /// The filename label within the tab.
     filename_label: gtk4::Label,
+    /// Close button in the tab label.
+    close_btn: gtk4::Button,
     /// The file path for this tab.
     path: Rc<RefCell<Option<PathBuf>>>,
     /// Tree-sitter syntax highlighter (None when no grammar exists for this file).
@@ -80,10 +82,20 @@ impl EditorTab {
         overlay.set_vexpand(true);
         overlay.set_hexpand(true);
 
-        // Build tab label
+        // Build tab label with close button
         let filename_label = gtk4::Label::new(Some("Untitled"));
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.add_css_class("circular");
+        close_btn.set_valign(gtk4::Align::Center);
+        close_btn.set_has_frame(false);
+        // Shrink the button so it doesn't dominate the tab label.
+        close_btn.set_margin_start(2);
+        close_btn.set_margin_end(0);
+
         let tab_label = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         tab_label.append(&filename_label);
+        tab_label.append(&close_btn);
 
         // Connect modified signal to update tab label
         let path_store: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
@@ -112,6 +124,7 @@ impl EditorTab {
             buffer,
             tab_label,
             filename_label,
+            close_btn,
             path: path_store,
             highlighter: Rc::new(RefCell::new(None)),
             use_treesitter: settings.use_treesitter,
@@ -204,6 +217,11 @@ impl EditorTab {
     /// The tab label widget.
     pub fn tab_label(&self) -> &gtk4::Box {
         &self.tab_label
+    }
+
+    /// The close button in the tab label.
+    pub fn close_btn(&self) -> &gtk4::Button {
+        &self.close_btn
     }
 
     /// The underlying sourceview5 View.
