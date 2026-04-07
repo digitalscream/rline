@@ -259,6 +259,14 @@ impl RlineWindow {
             }
         });
 
+        // Reveal the active file in the browser when switching editor tabs.
+        let fb = file_browser.clone();
+        split_container.set_on_active_file_changed(move |path| {
+            if let Some(ref p) = path {
+                fb.reveal_file(p);
+            }
+        });
+
         // Search result opens file at line
         let sc_search = split_container.clone();
         search_panel.set_on_open_file_at_line(move |path, line| {

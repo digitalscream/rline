@@ -141,6 +141,99 @@ impl FileBrowserPanel {
         &self.container
     }
 
+    /// Expand the tree to reveal the given file and select it.
+    ///
+    /// If the file is outside the project root or cannot be found in the tree,
+    /// this method does nothing.
+    pub fn reveal_file(&self, path: &Path) {
+        // Early return if this file is already selected.
+        if let Some(node) = get_selected_node(&self.list_view) {
+            if PathBuf::from(node.path()) == path {
+                return;
+            }
+        }
+
+        let project_root = self.project_root.borrow().clone();
+        let Some(root) = project_root else { return };
+
+        let canon_root = root.canonicalize().unwrap_or(root);
+        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        let relative = match canon_path.strip_prefix(&canon_root) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        let components: Vec<String> = relative
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => s.to_str().map(|s| s.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        if components.is_empty() {
+            return;
+        }
+
+        let Some(model) = self.list_view.model() else {
+            return;
+        };
+        let Some(selection) = model.downcast_ref::<gtk4::SingleSelection>() else {
+            return;
+        };
+        let Some(list_model) = selection.model() else {
+            return;
+        };
+        let Some(tree_model) = list_model.downcast_ref::<gtk4::TreeListModel>() else {
+            return;
+        };
+
+        let mut search_start = 0u32;
+        let mut target_depth = 0u32;
+
+        for (i, component) in components.iter().enumerate() {
+            let is_last = i == components.len() - 1;
+            let n_items = tree_model.n_items();
+            let mut found = false;
+            let start = search_start;
+
+            for j in start..n_items {
+                let Some(tree_row) = tree_model.row(j) else {
+                    continue;
+                };
+                let Some(node) = tree_row.item().and_downcast::<FileNode>() else {
+                    continue;
+                };
+
+                let depth = tree_row.depth();
+                if depth < target_depth && j > start {
+                    break;
+                }
+                if depth != target_depth {
+                    continue;
+                }
+
+                if node.name() == *component {
+                    if is_last {
+                        selection.set_selected(j);
+                        scroll_to_item(&self.list_view, j);
+                        return;
+                    }
+                    tree_row.set_expanded(true);
+                    search_start = j + 1;
+                    target_depth += 1;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                return;
+            }
+        }
+    }
+
     fn setup_factory(&self) {
         let factory = gtk4::SignalListItemFactory::new();
 
@@ -388,6 +481,38 @@ impl FileBrowserPanel {
         ));
         self.list_view.add_controller(gesture);
     }
+}
+
+/// Scroll the list view so that the item at `position` is visible.
+///
+/// Uses the scroll adjustment to estimate row positions. Deferred to an idle
+/// callback so the layout has settled after any tree expansion.
+fn scroll_to_item(list_view: &gtk4::ListView, position: u32) {
+    let lv = list_view.clone();
+    glib::idle_add_local_once(move || {
+        let Some(scrolled) = lv.parent().and_downcast::<gtk4::ScrolledWindow>() else {
+            return;
+        };
+        let Some(model) = lv.model() else { return };
+        let adj = scrolled.vadjustment();
+        let total = model.n_items() as f64;
+        if total <= 0.0 {
+            return;
+        }
+        let upper = adj.upper();
+        let page_size = adj.page_size();
+        if upper <= page_size {
+            return;
+        }
+        let row_height = upper / total;
+        let target_y = position as f64 * row_height;
+        let current = adj.value();
+        // Only scroll if the item is outside the visible range.
+        if target_y < current || target_y > current + page_size - row_height {
+            let value = (target_y - page_size / 2.0).clamp(0.0, (upper - page_size).max(0.0));
+            adj.set_value(value);
+        }
+    });
 }
 
 fn get_selected_node(list_view: &gtk4::ListView) -> Option<FileNode> {

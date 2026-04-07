@@ -263,6 +263,11 @@ impl EditorPane {
     /// The file path of the currently focused editor tab, if any.
     pub fn current_file_path(&self) -> Option<PathBuf> {
         let page_num = self.notebook.current_page()?;
+        self.file_path_at(page_num)
+    }
+
+    /// The file path of the editor tab at the given page index, if any.
+    pub fn file_path_at(&self, page_num: u32) -> Option<PathBuf> {
         let tabs = self.tabs.borrow();
         if let Some(TabKind::Editor(tab)) = tabs.get(page_num as usize) {
             tab.file_path()

@@ -36,6 +36,10 @@ enum SplitState {
     },
 }
 
+/// Callback invoked when the active editor tab changes, receiving the file path
+/// (if any) of the newly focused tab.
+type OnActiveFileChanged = Rc<RefCell<Option<Box<dyn Fn(Option<PathBuf>)>>>>;
+
 /// Container that holds one or two `EditorPane` instances, supporting vertical
 /// split via `Ctrl+\`. New files open in the last-focused pane, and closing
 /// the last tab in a split pane collapses back to a single pane.
@@ -49,6 +53,8 @@ pub struct SplitContainer {
     /// Which pane last received focus.
     active_pane: Rc<RefCell<PaneId>>,
     settings: Rc<RefCell<EditorSettings>>,
+    /// Callback fired when the active editor file changes (tab switch or pane focus).
+    on_active_file_changed: OnActiveFileChanged,
 }
 
 impl std::fmt::Debug for SplitContainer {
@@ -82,6 +88,20 @@ impl SplitContainer {
         outer.append(pane.widget());
 
         let settings = Rc::new(RefCell::new(settings));
+        let on_active_file_changed: OnActiveFileChanged = Rc::new(RefCell::new(None));
+
+        // Fire the file-changed callback whenever the initial pane switches tabs.
+        // Use the signal's page_num parameter (the NEW page) because
+        // `current_file_path()` still returns the OLD page at signal time.
+        {
+            let cb = on_active_file_changed.clone();
+            let pane_clone = pane.clone();
+            pane.notebook().connect_switch_page(move |_, _, page_num| {
+                if let Some(ref f) = *cb.borrow() {
+                    f(pane_clone.file_path_at(page_num));
+                }
+            });
+        }
 
         let sc = Self {
             outer,
@@ -89,6 +109,7 @@ impl SplitContainer {
             global_paths: Rc::new(RefCell::new(HashMap::new())),
             active_pane: Rc::new(RefCell::new(PaneId::Left)),
             settings,
+            on_active_file_changed,
         };
 
         sc.wire_tab_removed_callback(PaneId::Left);
@@ -176,6 +197,12 @@ impl SplitContainer {
                 right.apply_settings(settings);
             }
         }
+    }
+
+    /// Register a callback invoked whenever the active editor file changes
+    /// (tab switch or pane focus change in split mode).
+    pub fn set_on_active_file_changed<F: Fn(Option<PathBuf>) + 'static>(&self, f: F) {
+        self.on_active_file_changed.replace(Some(Box::new(f)));
     }
 
     /// Split the editor area vertically into two panes. The currently active
@@ -319,30 +346,48 @@ impl SplitContainer {
     }
 
     /// Attach focus-tracking to a pane so that any interaction (tab switch,
-    /// click into the editor area) marks it as active.
+    /// click into the editor area) marks it as active and notifies the
+    /// file-changed callback.
     fn attach_focus_tracking(&self, pane: &EditorPane, id: PaneId) {
         // Track notebook tab switches — fires when user clicks a tab.
+        // Use the signal's page_num (the NEW page) because current_page()
+        // still returns the old page at signal time.
         let active_for_nb = self.active_pane.clone();
-        pane.notebook().connect_switch_page(move |_, _, _| {
+        let cb_for_nb = self.on_active_file_changed.clone();
+        let pane_for_nb = pane.clone();
+        pane.notebook().connect_switch_page(move |_, _, page_num| {
             *active_for_nb.borrow_mut() = id;
+            if let Some(ref f) = *cb_for_nb.borrow() {
+                f(pane_for_nb.file_path_at(page_num));
+            }
         });
 
         // Track any click inside the pane container — catches clicks on the
         // sourceview body that don't trigger a tab switch.
         let active_for_click = self.active_pane.clone();
+        let cb_for_click = self.on_active_file_changed.clone();
+        let pane_for_click = pane.clone();
         let click_ctl = gtk4::GestureClick::new();
         click_ctl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         click_ctl.connect_pressed(move |_, _, _, _| {
             *active_for_click.borrow_mut() = id;
+            if let Some(ref f) = *cb_for_click.borrow() {
+                f(pane_for_click.current_file_path());
+            }
         });
         pane.widget().add_controller(click_ctl);
 
         // Also track keyboard focus entering the pane (e.g. Tab navigation).
         let active_for_focus = self.active_pane.clone();
+        let cb_for_focus = self.on_active_file_changed.clone();
+        let pane_for_focus = pane.clone();
         let focus_ctl = gtk4::EventControllerFocus::new();
         focus_ctl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         focus_ctl.connect_enter(move |_| {
             *active_for_focus.borrow_mut() = id;
+            if let Some(ref f) = *cb_for_focus.borrow() {
+                f(pane_for_focus.current_file_path());
+            }
         });
         pane.widget().add_controller(focus_ctl);
     }
