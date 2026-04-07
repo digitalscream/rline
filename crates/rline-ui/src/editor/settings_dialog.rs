@@ -47,6 +47,22 @@ impl SettingsDialog {
         }
         theme_row.append(&theme_dropdown);
 
+        // ── Import VS Code theme ──
+        let import_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        import_row.set_halign(gtk4::Align::End);
+        let import_btn = gtk4::Button::with_label("Import VS Code Theme...");
+        import_row.append(&import_btn);
+
+        import_btn.connect_clicked(glib::clone!(
+            #[weak]
+            window,
+            #[weak]
+            theme_dropdown,
+            move |_| {
+                Self::show_vscode_import_dialog(&window, &theme_dropdown);
+            }
+        ));
+
         // ── Enumerate monospace fonts ──
         let mono_fonts = Self::list_monospace_fonts();
         let mono_strs: Vec<&str> = mono_fonts.iter().map(|s| s.as_str()).collect();
@@ -118,6 +134,7 @@ impl SettingsDialog {
         button_box.append(&ok_btn);
 
         content.append(&theme_row);
+        content.append(&import_row);
         content.append(&editor_font_row);
         content.append(&font_row);
         content.append(&term_font_fam_row);
@@ -139,13 +156,11 @@ impl SettingsDialog {
         ));
 
         // Shared apply logic wrapped in Rc so both Apply and OK can call it
-        let scheme_ids_owned: Vec<String> = scheme_ids.iter().map(|s| s.to_string()).collect();
         let mono_fonts_owned = mono_fonts.clone();
         let on_apply = Rc::new(on_apply);
 
         // Wire Apply (apply changes, keep dialog open)
         let do_apply = {
-            let scheme_ids = scheme_ids_owned.clone();
             let mono_fonts = mono_fonts_owned.clone();
             let on_apply = on_apply.clone();
             Rc::new(
@@ -157,10 +172,11 @@ impl SettingsDialog {
                       last_project_switch: &gtk4::Switch,
                       expand_spin: &gtk4::SpinButton,
                       treesitter_switch: &gtk4::Switch| {
-                    let selected = theme_dropdown.selected() as usize;
-                    let theme = scheme_ids
-                        .get(selected)
-                        .cloned()
+                    // Read selected theme from the dropdown's model (handles dynamically added items)
+                    let theme = theme_dropdown
+                        .selected_item()
+                        .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
+                        .map(|so| so.string().to_string())
                         .unwrap_or_else(|| "Adwaita-dark".to_owned());
 
                     let editor_font_idx = editor_font_dropdown.selected() as usize;
@@ -281,6 +297,181 @@ impl SettingsDialog {
         label.set_halign(gtk4::Align::Start);
         row.append(&label);
         row
+    }
+
+    /// Show a dialog to import a VS Code theme.
+    fn show_vscode_import_dialog(parent: &gtk4::Window, theme_dropdown: &gtk4::DropDown) {
+        use rline_config::vscode_import;
+
+        let themes = vscode_import::discover_vscode_themes();
+        if themes.is_empty() {
+            let alert = gtk4::AlertDialog::builder()
+                .message("No VS Code Themes Found")
+                .detail("No VS Code installation with theme extensions was found on this system.\n\nChecked: ~/.vscode/extensions, ~/.vscode-insiders/extensions")
+                .build();
+            alert.show(Some(parent));
+            return;
+        }
+
+        let dialog = gtk4::Window::builder()
+            .title("Import VS Code Theme")
+            .modal(true)
+            .transient_for(parent)
+            .default_width(450)
+            .default_height(350)
+            .build();
+
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+
+        let label = gtk4::Label::new(Some("Select a theme to import:"));
+        label.set_halign(gtk4::Align::Start);
+        content.append(&label);
+
+        // Build a scrollable list of themes
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .vexpand(true)
+            .hexpand(true)
+            .min_content_height(200)
+            .build();
+
+        let list_box = gtk4::ListBox::new();
+        list_box.set_selection_mode(gtk4::SelectionMode::Single);
+
+        for theme in &themes {
+            let row_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+            row_box.set_margin_top(4);
+            row_box.set_margin_bottom(4);
+            row_box.set_margin_start(8);
+            row_box.set_margin_end(8);
+
+            let name_label = gtk4::Label::new(Some(&theme.label));
+            name_label.set_halign(gtk4::Align::Start);
+            name_label.add_css_class("heading");
+
+            let detail = format!(
+                "{} ({} theme)",
+                theme.extension_name,
+                if theme.ui_theme.contains("dark") {
+                    "dark"
+                } else {
+                    "light"
+                }
+            );
+            let detail_label = gtk4::Label::new(Some(&detail));
+            detail_label.set_halign(gtk4::Align::Start);
+            detail_label.add_css_class("dim-label");
+
+            row_box.append(&name_label);
+            row_box.append(&detail_label);
+            list_box.append(&row_box);
+        }
+
+        scrolled.set_child(Some(&list_box));
+        content.append(&scrolled);
+
+        // Buttons
+        let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        button_box.set_halign(gtk4::Align::End);
+        button_box.set_margin_top(8);
+
+        let cancel_btn = gtk4::Button::with_label("Cancel");
+        let import_btn = gtk4::Button::with_label("Import");
+        import_btn.add_css_class("suggested-action");
+
+        button_box.append(&cancel_btn);
+        button_box.append(&import_btn);
+        content.append(&button_box);
+
+        dialog.set_child(Some(&content));
+
+        cancel_btn.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            move |_| {
+                dialog.close();
+            }
+        ));
+
+        let themes = Rc::new(themes);
+        import_btn.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            #[weak]
+            list_box,
+            #[weak]
+            theme_dropdown,
+            #[strong]
+            themes,
+            move |_| {
+                let Some(row) = list_box.selected_row() else {
+                    return;
+                };
+                let idx = row.index() as usize;
+                let Some(entry) = themes.get(idx) else {
+                    return;
+                };
+
+                match Self::import_vscode_theme(entry, &theme_dropdown) {
+                    Ok(scheme_id) => {
+                        tracing::info!("imported VS Code theme as: {scheme_id}");
+                        dialog.close();
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to import theme: {e}");
+                        let alert = gtk4::AlertDialog::builder()
+                            .message("Import Failed")
+                            .detail(format!("Could not import theme: {e}"))
+                            .build();
+                        alert.show(Some(&dialog));
+                    }
+                }
+            }
+        ));
+
+        // Select the first row by default
+        if let Some(first_row) = list_box.row_at_index(0) {
+            list_box.select_row(Some(&first_row));
+        }
+
+        dialog.present();
+    }
+
+    /// Import a single VS Code theme: convert, install, and update the dropdown.
+    fn import_vscode_theme(
+        entry: &rline_config::vscode_import::VscodeThemeEntry,
+        theme_dropdown: &gtk4::DropDown,
+    ) -> Result<String, rline_config::ConfigError> {
+        use rline_config::vscode_import;
+        use sourceview5::prelude::*;
+
+        let scheme_id = vscode_import::import_vscode_theme(entry)?;
+
+        // Add the user styles directory to the search path and rescan
+        let scheme_manager = sourceview5::StyleSchemeManager::default();
+        if let Ok(styles_dir) = rline_config::paths::gtksourceview_styles_dir() {
+            let styles_path = styles_dir.to_string_lossy().to_string();
+            let current_paths = scheme_manager.search_path();
+            if !current_paths.iter().any(|p| p.as_str() == styles_path) {
+                scheme_manager.append_search_path(&styles_path);
+            }
+        }
+        scheme_manager.force_rescan();
+
+        // Add the new scheme ID to the dropdown model
+        if let Some(model) = theme_dropdown.model() {
+            if let Ok(string_list) = model.downcast::<gtk4::StringList>() {
+                string_list.append(&scheme_id);
+                // Select the newly imported theme
+                let new_idx = string_list.n_items() - 1;
+                theme_dropdown.set_selected(new_idx);
+            }
+        }
+
+        Ok(scheme_id)
     }
 
     /// Enumerate available monospace font families from Pango.

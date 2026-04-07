@@ -42,6 +42,9 @@ pub enum SupportedLanguage {
     /// Markdown (.md, .markdown)
     #[cfg(feature = "lang-markdown")]
     Markdown,
+    /// Ruby (.rb, .rake, .gemspec)
+    #[cfg(feature = "lang-ruby")]
+    Ruby,
 }
 
 /// Look up the tree-sitter language for a file extension.
@@ -88,6 +91,9 @@ pub fn language_for_extension(ext: &str) -> Option<SupportedLanguage> {
 
         #[cfg(feature = "lang-markdown")]
         "md" | "markdown" => Some(SupportedLanguage::Markdown),
+
+        #[cfg(feature = "lang-ruby")]
+        "rb" | "rake" | "gemspec" => Some(SupportedLanguage::Ruby),
 
         _ => None,
     }
@@ -139,6 +145,8 @@ pub fn language_name(language: SupportedLanguage) -> &'static str {
         SupportedLanguage::Css => "css",
         #[cfg(feature = "lang-markdown")]
         SupportedLanguage::Markdown => "markdown",
+        #[cfg(feature = "lang-ruby")]
+        SupportedLanguage::Ruby => "ruby",
     }
 }
 
@@ -167,6 +175,8 @@ pub fn ts_language(language: SupportedLanguage) -> tree_sitter::Language {
         SupportedLanguage::Css => tree_sitter_css::LANGUAGE.into(),
         #[cfg(feature = "lang-markdown")]
         SupportedLanguage::Markdown => tree_sitter_md::LANGUAGE.into(),
+        #[cfg(feature = "lang-ruby")]
+        SupportedLanguage::Ruby => tree_sitter_ruby::LANGUAGE.into(),
     }
 }
 
@@ -258,6 +268,14 @@ fn language_components(
             tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
             tree_sitter_md::INJECTION_QUERY_BLOCK,
             "",
+        ),
+
+        #[cfg(feature = "lang-ruby")]
+        SupportedLanguage::Ruby => (
+            tree_sitter_ruby::LANGUAGE.into(),
+            tree_sitter_ruby::HIGHLIGHTS_QUERY,
+            "",
+            tree_sitter_ruby::LOCALS_QUERY,
         ),
     }
 }
@@ -354,6 +372,8 @@ mod tests {
             SupportedLanguage::Css,
             #[cfg(feature = "lang-markdown")]
             SupportedLanguage::Markdown,
+            #[cfg(feature = "lang-ruby")]
+            SupportedLanguage::Ruby,
         ];
         for lang in languages {
             let config = build_highlight_config(lang);

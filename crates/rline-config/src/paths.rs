@@ -10,6 +10,36 @@ pub fn config_dir() -> Result<PathBuf, ConfigError> {
     Ok(dirs.config_dir().to_path_buf())
 }
 
+/// Returns the GtkSourceView 5 user styles directory.
+///
+/// This is where custom style scheme XML files should be installed so that
+/// `StyleSchemeManager` discovers them automatically.
+/// Typically `~/.local/share/gtksourceview-5/styles/`.
+pub fn gtksourceview_styles_dir() -> Result<PathBuf, ConfigError> {
+    let base = directories::BaseDirs::new().ok_or(ConfigError::NoDataDir)?;
+    Ok(base.data_dir().join("gtksourceview-5").join("styles"))
+}
+
+/// Returns all VS Code extension directories found on this system.
+///
+/// Checks standard locations for VS Code, VS Code Insiders, VS Codium,
+/// and Flatpak installations.
+pub fn vscode_extension_dirs() -> Vec<PathBuf> {
+    let Some(base) = directories::BaseDirs::new() else {
+        return Vec::new();
+    };
+    let home = base.home_dir();
+
+    let candidates = [
+        home.join(".vscode/extensions"),
+        home.join(".vscode-insiders/extensions"),
+        home.join(".vscode-oss/extensions"),
+        home.join(".var/app/com.visualstudio.code/data/vscode/extensions"),
+    ];
+
+    candidates.into_iter().filter(|p| p.is_dir()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

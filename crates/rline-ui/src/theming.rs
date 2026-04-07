@@ -16,6 +16,15 @@ pub fn apply_app_theme(scheme_id: &str) {
         None => return,
     };
 
+    // Try to load the rich syntax theme for VS Code UI colors
+    let syntax_theme = match rline_config::SyntaxTheme::load(scheme_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("no syntax theme for {scheme_id}: {e}");
+            None
+        }
+    };
+
     // Get the background color from the "text" style (the editor background)
     let bg_color = scheme
         .style("text")
@@ -49,15 +58,47 @@ pub fn apply_app_theme(scheme_id: &str) {
                 settings.set_gtk_application_prefer_dark_theme(is_dark);
             }
 
-            let chrome = darken_color(bg, 0.85);
-            let chrome_darker = darken_color(bg, 0.70);
+            // Use VS Code UI colors when available, fall back to derived values
+            let ui = |key: &str| {
+                syntax_theme
+                    .as_ref()
+                    .and_then(|t| t.ui_color(key))
+                    .map(|s| s.to_string())
+            };
+
+            let editor_bg = bg.clone();
+            let chrome = ui("sideBar.background").unwrap_or_else(|| darken_color(bg, 0.85));
+            let chrome_darker =
+                ui("activityBar.background").unwrap_or_else(|| darken_color(bg, 0.70));
+            let tab_bg = ui("tab.inactiveBackground").unwrap_or_else(|| chrome_darker.clone());
+            let tab_active_bg = ui("tab.activeBackground").unwrap_or_else(|| chrome.clone());
+            let titlebar_bg =
+                ui("titleBar.activeBackground").unwrap_or_else(|| chrome_darker.clone());
+            let line_number_fg = ui("editorLineNumber.foreground")
+                .unwrap_or_else(|| if is_dark { "#6e7681" } else { "#999999" }.into());
+            let line_number_active_fg =
+                ui("editorLineNumber.activeForeground").unwrap_or_else(|| {
+                    fg_color
+                        .clone()
+                        .unwrap_or_else(|| if is_dark { "#e0e0e0" } else { "#1e1e1e" }.into())
+                });
+
             let fg = fg_color
                 .as_deref()
                 .unwrap_or(if is_dark { "#e0e0e0" } else { "#1e1e1e" });
-            let fg_dim = if is_dark { "#aaaaaa" } else { "#555555" };
-            let separator = if is_dark { "#1a1a1a" } else { "#cccccc" };
+            let sidebar_fg = ui("sideBar.foreground").unwrap_or_else(|| fg.to_string());
+            let fg_dim = ui("descriptionForeground")
+                .unwrap_or_else(|| if is_dark { "#aaaaaa" } else { "#555555" }.into());
+            let separator = ui("sideBar.border")
+                .unwrap_or_else(|| if is_dark { "#1a1a1a" } else { "#cccccc" }.into());
+            let gutter_bg = ui("editorGutter.background").unwrap_or_else(|| editor_bg.clone());
+            let button_bg = ui("button.background").unwrap_or_else(|| darken_color(&chrome, 0.85));
+            let button_fg = ui("button.foreground").unwrap_or_else(|| fg.to_string());
+            let button_hover_bg = darken_color(&button_bg, 0.85);
+            let input_bg = ui("input.background").unwrap_or_else(|| darken_color(bg, 0.8));
+            let input_border = ui("input.border").unwrap_or_else(|| separator.clone());
 
-            format!(
+            let css_str = format!(
                 r#"
                 /* ── Global backgrounds ── */
                 window,
@@ -68,16 +109,29 @@ pub fn apply_app_theme(scheme_id: &str) {
 
                 /* ── Header bar ── */
                 headerbar {{
-                    background-color: {chrome_darker};
+                    background: {titlebar_bg};
                     color: {fg};
                     min-height: 36px;
+                    border-bottom: 1px solid {separator};
+                    box-shadow: none;
                 }}
 
                 /* ── Left pane: stack switcher + panels ── */
                 stackswitcher {{
-                    background-color: {chrome_darker};
+                    background: {chrome_darker};
                 }}
                 stackswitcher > button {{
+                    background: {chrome_darker};
+                    color: {sidebar_fg};
+                    border: none;
+                    box-shadow: none;
+                    border-radius: 0;
+                }}
+                stackswitcher > button:hover {{
+                    background: {chrome};
+                }}
+                stackswitcher > button:checked {{
+                    background: {chrome};
                     color: {fg};
                 }}
                 stack {{
@@ -86,24 +140,49 @@ pub fn apply_app_theme(scheme_id: &str) {
 
                 /* ── Tab bars in notebooks ── */
                 notebook > header {{
-                    background-color: {chrome_darker};
+                    background: {tab_bg};
+                    border-bottom: 1px solid {separator};
                 }}
                 notebook > header tab {{
-                    color: {fg};
+                    background: {tab_bg};
+                    color: {fg_dim};
+                    border: none;
+                    box-shadow: none;
+                    padding: 4px 12px;
                 }}
                 notebook > header tab:checked {{
+                    background: {tab_active_bg};
                     color: {fg};
+                    border-bottom: 2px solid {fg};
                 }}
 
-                /* ── Labels, buttons, entries ── */
+                /* ── Buttons ── */
+                button {{
+                    background: {button_bg};
+                    color: {button_fg};
+                    border: 1px solid {separator};
+                    box-shadow: none;
+                }}
+                button:hover {{
+                    background: {button_hover_bg};
+                }}
+                button.flat {{
+                    background: transparent;
+                    border: none;
+                }}
+                button.flat:hover {{
+                    background: {chrome};
+                }}
+
+                /* ── Labels, entries ── */
                 label {{
                     color: {fg};
                 }}
-                button {{
+                entry, searchentry {{
+                    background: {input_bg};
                     color: {fg};
-                }}
-                entry {{
-                    color: {fg};
+                    border: 1px solid {input_border};
+                    box-shadow: none;
                 }}
                 searchentry text {{
                     color: {fg};
@@ -129,22 +208,39 @@ pub fn apply_app_theme(scheme_id: &str) {
                 /* ── List views (file browser, search results) ── */
                 listview {{
                     background-color: {chrome};
-                    color: {fg};
+                    color: {sidebar_fg};
                 }}
                 listview > row {{
-                    color: {fg};
+                    color: {sidebar_fg};
                 }}
 
                 /* ── Popover menus (right-click) ── */
                 popover {{
-                    background-color: {chrome_darker};
+                    background: {chrome_darker};
                     color: {fg};
                 }}
                 popover modelbutton {{
                     color: {fg};
                 }}
+
+                /* ── Editor line number gutter ── */
+                textview.view border.left gutter {{
+                    background-color: {gutter_bg};
+                }}
+                textview border.left {{
+                    background-color: {gutter_bg};
+                }}
+                .line-numbers {{
+                    color: {line_number_fg};
+                    background-color: {gutter_bg};
+                }}
+                .current-line-number {{
+                    color: {line_number_active_fg};
+                }}
                 "#
-            )
+            );
+
+            css_str
         }
         None => {
             // No custom background — respect system default and just fix separators
