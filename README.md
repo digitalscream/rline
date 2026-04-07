@@ -41,6 +41,11 @@ cargo build              # Debug build
 cargo build --release    # Release build
 ```
 
+## Binary Pre-Requisites
+
+```sudo apt install libvte-2.91-gtk4-0 libgtksourceview-5-0 libgraphene-1.0-0
+```
+
 ## Running
 
 ```bash
