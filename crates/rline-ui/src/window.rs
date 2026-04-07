@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 
-use crate::editor::EditorPane;
+use crate::editor::SplitContainer;
 use crate::file_browser::FileBrowserPanel;
 use crate::git::GitPanel;
 use crate::menu;
@@ -20,7 +20,7 @@ mod imp {
 
     #[derive(Debug, Default)]
     pub struct RlineWindow {
-        pub editor_pane: RefCell<Option<EditorPane>>,
+        pub split_container: RefCell<Option<SplitContainer>>,
         pub file_browser: RefCell<Option<FileBrowserPanel>>,
         pub search_panel: RefCell<Option<ProjectSearchPanel>>,
         pub git_panel: RefCell<Option<GitPanel>>,
@@ -42,6 +42,7 @@ mod imp {
             let window = self.obj();
             window.setup_layout();
             window.setup_actions();
+            window.setup_key_controller();
         }
     }
 
@@ -146,11 +147,11 @@ impl RlineWindow {
         stack.set_vexpand(true);
 
         // ── Middle pane: editor (top) + terminal (bottom) ──
-        let editor_pane = EditorPane::new();
+        let split_container = SplitContainer::new();
         let terminal_pane = TerminalPane::new();
 
         let middle_paned = gtk4::Paned::new(gtk4::Orientation::Vertical);
-        middle_paned.set_start_child(Some(editor_pane.widget()));
+        middle_paned.set_start_child(Some(split_container.widget()));
         middle_paned.set_end_child(Some(terminal_pane.widget()));
         middle_paned.set_resize_start_child(true);
         middle_paned.set_resize_end_child(true);
@@ -193,12 +194,12 @@ impl RlineWindow {
         // ── Wire cross-component callbacks ──
         self.wire_file_browser(
             &file_browser,
-            &editor_pane,
+            &split_container,
             &terminal_pane,
             &search_panel,
             &git_panel,
         );
-        self.wire_git_panel(&git_panel, &editor_pane);
+        self.wire_git_panel(&git_panel, &split_container);
 
         // Wire action buttons (needs the window reference for confirmation dialogs).
         git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
@@ -214,7 +215,7 @@ impl RlineWindow {
         });
 
         // ── Store references ──
-        imp.editor_pane.replace(Some(editor_pane));
+        imp.split_container.replace(Some(split_container));
         imp.file_browser.replace(Some(file_browser.clone()));
         imp.search_panel.replace(Some(search_panel));
         imp.git_panel.replace(Some(git_panel));
@@ -245,23 +246,23 @@ impl RlineWindow {
     fn wire_file_browser(
         &self,
         file_browser: &FileBrowserPanel,
-        editor_pane: &EditorPane,
+        split_container: &SplitContainer,
         terminal_pane: &TerminalPane,
         search_panel: &ProjectSearchPanel,
         git_panel: &GitPanel,
     ) {
         // Single-click opens file in editor
-        let ep = editor_pane.clone();
+        let sc = split_container.clone();
         file_browser.set_on_open_file(move |path| {
-            if let Err(e) = ep.open_file(path) {
+            if let Err(e) = sc.open_file(path) {
                 tracing::error!("failed to open file: {e}");
             }
         });
 
         // Search result opens file at line
-        let ep_search = editor_pane.clone();
+        let sc_search = split_container.clone();
         search_panel.set_on_open_file_at_line(move |path, line| {
-            if let Err(e) = ep_search.open_file_at_line(path, line) {
+            if let Err(e) = sc_search.open_file_at_line(path, line) {
                 tracing::error!("failed to open file at line: {e}");
             }
         });
@@ -293,8 +294,8 @@ impl RlineWindow {
     }
 
     /// Wire the git panel's diff callback to the editor pane.
-    fn wire_git_panel(&self, git_panel: &GitPanel, editor_pane: &EditorPane) {
-        let ep = editor_pane.clone();
+    fn wire_git_panel(&self, git_panel: &GitPanel, split_container: &SplitContainer) {
+        let sc = split_container.clone();
         let gp = git_panel.clone();
 
         git_panel.set_on_open_diff(move |path, is_staged| {
@@ -314,11 +315,11 @@ impl RlineWindow {
                 let _ = sender.send(result);
             });
 
-            let ep_clone = ep.clone();
+            let sc_clone = sc.clone();
             let path_for_ui = path.clone();
             glib::idle_add_local(move || match receiver.try_recv() {
                 Ok(Ok(diff)) => {
-                    if let Err(e) = ep_clone.open_diff(&path_for_ui, &diff) {
+                    if let Err(e) = sc_clone.open_diff(&path_for_ui, &diff) {
                         tracing::error!("failed to open diff: {e}");
                     }
                     glib::ControlFlow::Break
@@ -352,9 +353,9 @@ impl RlineWindow {
                 #[weak(rename_to = window)]
                 self,
                 move |_, _, _| {
-                    let editor = window.imp().editor_pane.borrow().clone();
-                    if let Some(ref editor) = editor {
-                        editor.save_current_tab();
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.save_current_tab();
                     }
                 }
             ))
@@ -462,9 +463,9 @@ impl RlineWindow {
                 #[weak(rename_to = window)]
                 self,
                 move |_, _, _| {
-                    let editor = window.imp().editor_pane.borrow().clone();
-                    if let Some(ref editor) = editor {
-                        editor.show_find_bar(false);
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.show_find_bar(false);
                     }
                 }
             ))
@@ -476,9 +477,24 @@ impl RlineWindow {
                 #[weak(rename_to = window)]
                 self,
                 move |_, _, _| {
-                    let editor = window.imp().editor_pane.borrow().clone();
-                    if let Some(ref editor) = editor {
-                        editor.show_find_bar(true);
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.show_find_bar(true);
+                    }
+                }
+            ))
+            .build();
+
+        // win.split-editor (Ctrl+\)
+        let action_split = gio::ActionEntry::builder("split-editor")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    tracing::info!("split-editor action triggered");
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.split_vertical();
                     }
                 }
             ))
@@ -497,7 +513,35 @@ impl RlineWindow {
             action_focus_terminal,
             action_find,
             action_find_replace,
+            action_split,
         ]);
+    }
+
+    /// Install a window-level key controller for shortcuts that may be
+    /// swallowed by child widgets (sourceview, VTE) before the accelerator
+    /// system sees them.
+    fn setup_key_controller(&self) {
+        let key_ctl = gtk4::EventControllerKey::new();
+        key_ctl.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        key_ctl.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[upgrade_or]
+            gtk4::glib::Propagation::Proceed,
+            move |_, key, _, modifiers| {
+                if key == gtk4::gdk::Key::backslash
+                    && modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                {
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.split_vertical();
+                    }
+                    return gtk4::glib::Propagation::Stop;
+                }
+                gtk4::glib::Propagation::Proceed
+            }
+        ));
+        self.add_controller(key_ctl);
     }
 
     fn action_open_file(&self) {
@@ -516,8 +560,8 @@ impl RlineWindow {
                     if let Ok(file) = result {
                         if let Some(path) = file.path() {
                             let imp = window.imp();
-                            if let Some(ref editor) = *imp.editor_pane.borrow() {
-                                if let Err(e) = editor.open_file(&path) {
+                            if let Some(ref sc) = *imp.split_container.borrow() {
+                                if let Err(e) = sc.open_file(&path) {
                                     tracing::error!("failed to open file: {e}");
                                 }
                             }
@@ -530,8 +574,8 @@ impl RlineWindow {
 
     fn action_close_tab(&self) {
         let imp = self.imp();
-        if let Some(ref editor) = *imp.editor_pane.borrow() {
-            editor.close_current_tab();
+        if let Some(ref sc) = *imp.split_container.borrow() {
+            sc.close_current_tab();
         }
     }
 
@@ -548,10 +592,10 @@ impl RlineWindow {
         };
 
         let dialog = crate::search::QuickOpenDialog::new(self.upcast_ref(), &root);
-        let ep = imp.editor_pane.borrow().clone();
+        let sc = imp.split_container.borrow().clone();
         dialog.set_on_file_selected(move |path| {
-            if let Some(ref editor) = ep {
-                if let Err(e) = editor.open_file(path) {
+            if let Some(ref sc) = sc {
+                if let Err(e) = sc.open_file(path) {
                     tracing::error!("failed to open file: {e}");
                 }
             }
@@ -578,13 +622,13 @@ impl RlineWindow {
 
     fn action_show_settings(&self) {
         let imp = self.imp();
-        let editor_pane = imp.editor_pane.borrow().clone();
+        let split_container = imp.split_container.borrow().clone();
         let terminal_pane = imp.terminal_pane.borrow().clone();
         let dialog = crate::editor::SettingsDialog::new(self.upcast_ref(), move |settings| {
             // Always update app-wide chrome, even if no editor tabs are open
             crate::theming::apply_app_theme(&settings.theme);
-            if let Some(ref editor) = editor_pane {
-                editor.apply_settings(&settings);
+            if let Some(ref sc) = split_container {
+                sc.apply_settings(&settings);
             }
             if let Some(ref terminal) = terminal_pane {
                 terminal.apply_settings(&settings);

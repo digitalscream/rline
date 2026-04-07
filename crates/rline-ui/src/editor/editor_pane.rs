@@ -46,8 +46,11 @@ impl TabKind {
     }
 }
 
+/// Callback invoked after a tab is removed, receiving the remaining tab count.
+type OnTabRemoved = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
+
 /// The editor pane containing a notebook of editor tabs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EditorPane {
     container: gtk4::Box,
     notebook: gtk4::Notebook,
@@ -58,6 +61,16 @@ pub struct EditorPane {
     settings: Rc<RefCell<EditorSettings>>,
     /// Most-recently-used tab indices (front = most recent).
     mru: Rc<RefCell<Vec<u32>>>,
+    /// Optional callback fired after a tab is removed.
+    on_tab_removed: OnTabRemoved,
+}
+
+impl std::fmt::Debug for EditorPane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorPane")
+            .field("tab_count", &self.tabs.borrow().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for EditorPane {
@@ -167,6 +180,7 @@ impl EditorPane {
             path_to_index: Rc::new(RefCell::new(HashMap::new())),
             settings,
             mru,
+            on_tab_removed: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -242,6 +256,17 @@ impl EditorPane {
         Ok(())
     }
 
+    /// The file path of the currently focused editor tab, if any.
+    pub fn current_file_path(&self) -> Option<PathBuf> {
+        let page_num = self.notebook.current_page()?;
+        let tabs = self.tabs.borrow();
+        if let Some(TabKind::Editor(tab)) = tabs.get(page_num as usize) {
+            tab.file_path()
+        } else {
+            None
+        }
+    }
+
     /// Save the currently focused editor tab.
     pub fn save_current_tab(&self) {
         if let Some(page_num) = self.notebook.current_page() {
@@ -267,6 +292,7 @@ impl EditorPane {
                     let path_map = self.path_to_index.clone();
                     let mru_rc = self.mru.clone();
                     let tab_clone = tab.clone();
+                    let on_removed = self.on_tab_removed.clone();
 
                     let dialog = gtk4::AlertDialog::builder()
                         .message("Save changes?")
@@ -295,6 +321,8 @@ impl EditorPane {
                             mru_rc,
                             #[strong]
                             tab_clone,
+                            #[strong]
+                            on_removed,
                             move |result| {
                                 match result {
                                     Ok(0) => {
@@ -304,13 +332,23 @@ impl EditorPane {
                                             return;
                                         }
                                         Self::remove_tab(
-                                            &notebook, &tabs_rc, &path_map, &mru_rc, page_num,
+                                            &notebook,
+                                            &tabs_rc,
+                                            &path_map,
+                                            &mru_rc,
+                                            &on_removed,
+                                            page_num,
                                         );
                                     }
                                     Ok(1) => {
                                         // Discard — just close
                                         Self::remove_tab(
-                                            &notebook, &tabs_rc, &path_map, &mru_rc, page_num,
+                                            &notebook,
+                                            &tabs_rc,
+                                            &path_map,
+                                            &mru_rc,
+                                            &on_removed,
+                                            page_num,
                                         );
                                     }
                                     _ => {
@@ -330,6 +368,7 @@ impl EditorPane {
                 &self.tabs,
                 &self.path_to_index,
                 &self.mru,
+                &self.on_tab_removed,
                 page_num,
             );
         }
@@ -355,6 +394,43 @@ impl EditorPane {
         }
     }
 
+    /// The number of open tabs in this pane.
+    pub fn tab_count(&self) -> usize {
+        self.tabs.borrow().len()
+    }
+
+    /// Check whether a file (by canonical path) is open, returning the notebook
+    /// page index if found.
+    pub fn has_file(&self, canonical: &Path) -> Option<usize> {
+        self.path_to_index.borrow().get(canonical).copied()
+    }
+
+    /// Focus the tab at the given notebook page index.
+    pub fn focus_tab(&self, idx: usize) {
+        self.notebook.set_current_page(Some(idx as u32));
+    }
+
+    /// Register a callback invoked after a tab is removed. The callback
+    /// receives the number of remaining tabs in this pane.
+    pub fn set_on_tab_removed(&self, cb: impl Fn(usize) + 'static) {
+        self.on_tab_removed.replace(Some(Box::new(cb)));
+    }
+
+    /// The underlying notebook widget.
+    pub fn notebook(&self) -> &gtk4::Notebook {
+        &self.notebook
+    }
+
+    /// All dedup keys for currently open tabs, used by `SplitContainer` to
+    /// rebuild its cross-pane path index.
+    pub fn dedup_keys(&self) -> Vec<PathBuf> {
+        self.tabs
+            .borrow()
+            .iter()
+            .filter_map(|t| t.dedup_key())
+            .collect()
+    }
+
     /// The container widget to embed in the layout.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
@@ -365,24 +441,29 @@ impl EditorPane {
         tabs: &Rc<RefCell<Vec<TabKind>>>,
         path_map: &Rc<RefCell<HashMap<PathBuf, usize>>>,
         mru: &Rc<RefCell<Vec<u32>>>,
+        on_removed: &OnTabRemoved,
         page_num: u32,
     ) {
         let idx = page_num as usize;
-        let mut tabs_vec = tabs.borrow_mut();
-        if idx < tabs_vec.len() {
-            let removed = tabs_vec.remove(idx);
-            // Remove from path map using the dedup key.
-            if let Some(key) = removed.dedup_key() {
-                path_map.borrow_mut().remove(&key);
-            }
-            // Rebuild index map.
-            let mut map = path_map.borrow_mut();
-            map.clear();
-            for (i, tab) in tabs_vec.iter().enumerate() {
-                if let Some(key) = tab.dedup_key() {
-                    map.insert(key, i);
+        let remaining;
+        {
+            let mut tabs_vec = tabs.borrow_mut();
+            if idx < tabs_vec.len() {
+                let removed = tabs_vec.remove(idx);
+                // Remove from path map using the dedup key.
+                if let Some(key) = removed.dedup_key() {
+                    path_map.borrow_mut().remove(&key);
+                }
+                // Rebuild index map.
+                let mut map = path_map.borrow_mut();
+                map.clear();
+                for (i, tab) in tabs_vec.iter().enumerate() {
+                    if let Some(key) = tab.dedup_key() {
+                        map.insert(key, i);
+                    }
                 }
             }
+            remaining = tabs_vec.len();
         }
         notebook.remove_page(Some(page_num));
 
@@ -393,6 +474,12 @@ impl EditorPane {
             if *p > page_num {
                 *p -= 1;
             }
+        }
+        drop(mru_list);
+
+        // Notify the container about the removal.
+        if let Some(ref cb) = *on_removed.borrow() {
+            cb(remaining);
         }
     }
 }
