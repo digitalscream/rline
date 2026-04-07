@@ -199,6 +199,11 @@ impl SplitContainer {
         }
     }
 
+    /// The currently active editor tab in the focused pane, if any.
+    pub fn current_editor_tab(&self) -> Option<super::tab::EditorTab> {
+        self.get_active_pane().current_editor_tab()
+    }
+
     /// Register a callback invoked whenever the active editor file changes
     /// (tab switch or pane focus change in split mode).
     pub fn set_on_active_file_changed<F: Fn(Option<PathBuf>) + 'static>(&self, f: F) {

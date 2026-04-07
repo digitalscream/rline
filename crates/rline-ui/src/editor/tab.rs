@@ -229,6 +229,11 @@ impl EditorTab {
         &self.view
     }
 
+    /// The underlying sourceview5 Buffer.
+    pub fn buffer(&self) -> &sourceview5::Buffer {
+        &self.buffer
+    }
+
     /// Apply settings to this tab.
     pub fn apply_settings(&self, settings: &EditorSettings) {
         self.view.set_show_line_numbers(settings.show_line_numbers);

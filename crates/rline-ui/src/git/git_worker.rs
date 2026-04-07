@@ -428,6 +428,144 @@ pub fn unstage_all(root: &Path) -> Result<(), git2::Error> {
     Ok(())
 }
 
+/// Summary of a git blame result for a single line.
+#[derive(Debug, Clone)]
+pub struct BlameInfo {
+    /// Commit author name.
+    pub author: String,
+    /// Human-readable relative date (e.g. "2 days ago").
+    pub date: String,
+    /// First line of the commit message.
+    pub summary: String,
+}
+
+/// Get blame information for a single line in a file.
+///
+/// `line` is 1-based. Returns `None`-equivalent via `Err` when the line
+/// has no blame data (e.g. uncommitted new file).
+pub fn get_blame_for_line(
+    root: &Path,
+    file_path: &Path,
+    line: u32,
+) -> Result<BlameInfo, git2::Error> {
+    let repo = git2::Repository::discover(root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("bare repository"))?;
+
+    let relative = file_path.strip_prefix(workdir).unwrap_or(file_path);
+
+    let mut opts = git2::BlameOptions::new();
+    opts.min_line(line as usize);
+    opts.max_line(line as usize);
+
+    let blame = repo.blame_file(relative, Some(&mut opts))?;
+    let hunk = blame
+        .get_line(line as usize)
+        .ok_or_else(|| git2::Error::from_str("no blame info for line"))?;
+
+    let sig = hunk.final_signature();
+    let author = sig.name().unwrap_or("Unknown").to_string();
+    let epoch = sig.when().seconds();
+    let date = format_relative_time(epoch);
+
+    let commit = repo.find_commit(hunk.final_commit_id())?;
+    let summary = commit.summary().unwrap_or("").to_string();
+
+    Ok(BlameInfo {
+        author,
+        date,
+        summary,
+    })
+}
+
+/// Basic repository metadata for the status bar.
+#[derive(Debug, Clone)]
+pub struct RepoInfo {
+    /// Repository name (last component of the workdir path).
+    pub name: String,
+    /// Current branch name, or HEAD commit short hash if detached.
+    pub branch: String,
+}
+
+/// Get the repository name and current branch.
+pub fn get_repo_info(root: &Path) -> Result<RepoInfo, git2::Error> {
+    let repo = git2::Repository::discover(root)?;
+
+    let name = repo
+        .workdir()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let branch = repo
+        .head()
+        .ok()
+        .and_then(|head| head.shorthand().map(String::from))
+        .unwrap_or_else(|| "HEAD".to_string());
+
+    Ok(RepoInfo { name, branch })
+}
+
+/// Format an epoch timestamp as a human-readable relative time string.
+fn format_relative_time(epoch: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let diff = now - epoch;
+    if diff < 0 {
+        return "in the future".to_string();
+    }
+
+    let diff = diff as u64;
+    match diff {
+        0..=59 => "just now".to_string(),
+        60..=3599 => {
+            let m = diff / 60;
+            if m == 1 {
+                "1 minute ago".to_string()
+            } else {
+                format!("{m} minutes ago")
+            }
+        }
+        3600..=86399 => {
+            let h = diff / 3600;
+            if h == 1 {
+                "1 hour ago".to_string()
+            } else {
+                format!("{h} hours ago")
+            }
+        }
+        86400..=2_591_999 => {
+            let d = diff / 86400;
+            if d == 1 {
+                "1 day ago".to_string()
+            } else {
+                format!("{d} days ago")
+            }
+        }
+        2_592_000..=31_535_999 => {
+            let m = diff / 2_592_000;
+            if m == 1 {
+                "1 month ago".to_string()
+            } else {
+                format!("{m} months ago")
+            }
+        }
+        _ => {
+            let y = diff / 31_536_000;
+            if y == 1 {
+                "1 year ago".to_string()
+            } else {
+                format!("{y} years ago")
+            }
+        }
+    }
+}
+
 /// Create a commit with the given message from the current index.
 pub fn commit(root: &Path, message: &str) -> Result<(), git2::Error> {
     let repo = git2::Repository::discover(root)?;

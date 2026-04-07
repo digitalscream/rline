@@ -474,6 +474,16 @@ impl EditorPane {
             .collect()
     }
 
+    /// The currently active editor tab, if any (not diff tabs).
+    pub fn current_editor_tab(&self) -> Option<EditorTab> {
+        let page = self.notebook.current_page()?;
+        let tabs = self.tabs.borrow();
+        match tabs.get(page as usize) {
+            Some(TabKind::Editor(tab)) => Some(tab.clone()),
+            _ => None,
+        }
+    }
+
     /// The container widget to embed in the layout.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container

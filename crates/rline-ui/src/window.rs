@@ -11,6 +11,7 @@ use crate::file_browser::FileBrowserPanel;
 use crate::git::GitPanel;
 use crate::menu;
 use crate::search::ProjectSearchPanel;
+use crate::status_bar::StatusBar;
 use crate::terminal::TerminalPane;
 
 // ── Implementation ──────────────────────────────────────────────
@@ -25,6 +26,7 @@ mod imp {
         pub search_panel: RefCell<Option<ProjectSearchPanel>>,
         pub git_panel: RefCell<Option<GitPanel>>,
         pub terminal_pane: RefCell<Option<TerminalPane>>,
+        pub status_bar: RefCell<Option<StatusBar>>,
         pub left_stack: RefCell<Option<gtk4::Stack>>,
         pub project_root: RefCell<Option<PathBuf>>,
     }
@@ -185,7 +187,15 @@ impl RlineWindow {
         outer_paned.set_shrink_end_child(false);
         outer_paned.set_position(250);
 
-        self.set_child(Some(&outer_paned));
+        // ── Status bar at the very bottom ──
+        let status_bar = StatusBar::new();
+
+        let root_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        root_box.append(&outer_paned);
+        root_box.append(status_bar.widget());
+        outer_paned.set_vexpand(true);
+
+        self.set_child(Some(&root_box));
 
         // ── Apply initial theme ──
         let settings = rline_config::EditorSettings::load().unwrap_or_default();
@@ -198,6 +208,7 @@ impl RlineWindow {
             &terminal_pane,
             &search_panel,
             &git_panel,
+            &status_bar,
         );
         self.wire_git_panel(&git_panel, &split_container);
 
@@ -220,6 +231,7 @@ impl RlineWindow {
         imp.search_panel.replace(Some(search_panel));
         imp.git_panel.replace(Some(git_panel));
         imp.terminal_pane.replace(Some(terminal_pane));
+        imp.status_bar.replace(Some(status_bar));
         imp.left_stack.replace(Some(stack));
 
         // ── Restore last project on startup ──
@@ -230,6 +242,9 @@ impl RlineWindow {
                     tracing::info!("restoring last project: {}", path.display());
                     file_browser.set_root(&path);
                     self.set_title(Some(&format!("rline - {}", path.display())));
+                    if let Some(ref sb) = *imp.status_bar.borrow() {
+                        sb.set_project_root(&path);
+                    }
                 }
             }
         }
@@ -242,7 +257,7 @@ impl RlineWindow {
     }
 
     /// Wire the file browser's open callback to the editor pane, and project root
-    /// changes to terminal, search, and git.
+    /// changes to terminal, search, git, and status bar.
     fn wire_file_browser(
         &self,
         file_browser: &FileBrowserPanel,
@@ -250,6 +265,7 @@ impl RlineWindow {
         terminal_pane: &TerminalPane,
         search_panel: &ProjectSearchPanel,
         git_panel: &GitPanel,
+        status_bar: &StatusBar,
     ) {
         // Single-click opens file in editor
         let sc = split_container.clone();
@@ -259,12 +275,26 @@ impl RlineWindow {
             }
         });
 
-        // Reveal the active file in the browser when switching editor tabs.
+        // Reveal the active file in the browser when switching editor tabs,
+        // and update the status bar with the new buffer for blame tracking.
         let fb = file_browser.clone();
+        let sb = status_bar.clone();
+        let sc_for_status = split_container.clone();
         split_container.set_on_active_file_changed(move |path| {
             if let Some(ref p) = path {
                 fb.reveal_file(p);
             }
+            // Defer status bar update: during switch-page, current_page() still
+            // returns the OLD page, so current_editor_tab() would yield the wrong
+            // buffer. By the time the idle callback runs the switch is complete.
+            let sb_clone = sb.clone();
+            let sc_clone = sc_for_status.clone();
+            let path_clone = path.clone();
+            glib::idle_add_local_once(move || {
+                let tab = sc_clone.current_editor_tab();
+                let buffer = tab.as_ref().map(|t| t.buffer().clone());
+                sb_clone.set_active_editor(buffer, path_clone);
+            });
         });
 
         // Search result opens file at line
@@ -275,10 +305,11 @@ impl RlineWindow {
             }
         });
 
-        // Project root changes update terminal + search + git + persist last project
+        // Project root changes update terminal + search + git + status bar + persist last project
         let tp = terminal_pane.clone();
         let sp = search_panel.clone();
         let gp = git_panel.clone();
+        let sb_root = status_bar.clone();
         file_browser.set_on_project_root_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -289,6 +320,7 @@ impl RlineWindow {
                 tp.set_default_directory(root);
                 sp.set_project_root(root);
                 gp.set_project_root(root);
+                sb_root.set_project_root(root);
 
                 // Persist last project path for next startup
                 if let Ok(mut settings) = rline_config::EditorSettings::load() {

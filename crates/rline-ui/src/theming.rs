@@ -276,6 +276,69 @@ pub fn apply_app_theme(scheme_id: &str) {
         }
     };
 
+    // Status bar color: use the activity bar or chrome-darker background.
+    let status_bar_bg = bg_color
+        .as_ref()
+        .map(|bg| {
+            syntax_theme
+                .as_ref()
+                .and_then(|t| t.ui_color("statusBar.background"))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| darken_color(bg, 0.70))
+        })
+        .unwrap_or_default();
+    let status_bar_fg = bg_color
+        .as_ref()
+        .map(|bg| {
+            syntax_theme
+                .as_ref()
+                .and_then(|t| t.ui_color("statusBar.foreground"))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    if perceived_brightness(bg) < 128 {
+                        "#cccccc".to_string()
+                    } else {
+                        "#555555".to_string()
+                    }
+                })
+        })
+        .unwrap_or_default();
+
+    let status_bar_css = if !status_bar_bg.is_empty() {
+        format!(
+            r#"
+            .status-bar {{
+                background: {status_bar_bg};
+                padding: 2px 0;
+                min-height: 20px;
+            }}
+            .status-bar-label {{
+                color: {status_bar_fg};
+                font-size: 11px;
+            }}
+            .status-bar-icon {{
+                color: {status_bar_fg};
+                -gtk-icon-size: 12px;
+            }}
+            .status-bar-blame {{
+                color: {status_bar_fg};
+                font-size: 11px;
+            }}
+            "#
+        )
+    } else {
+        r#"
+            .status-bar {
+                padding: 2px 0;
+                min-height: 20px;
+            }
+            .status-bar-label { font-size: 11px; }
+            .status-bar-icon { -gtk-icon-size: 12px; }
+            .status-bar-blame { font-size: 11px; }
+        "#
+        .to_string()
+    };
+
     // Append git status badge colors and compact list row spacing.
     let git_css = r#"
         .git-status-m { color: #e2c08d; }
@@ -289,7 +352,7 @@ pub fn apply_app_theme(scheme_id: &str) {
         textview.commit-input { border-radius: 6px; }
         textview.commit-input text { background: transparent; }
     "#;
-    let full_css = format!("{css}\n{git_css}");
+    let full_css = format!("{css}\n{status_bar_css}\n{git_css}");
 
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(&full_css);
