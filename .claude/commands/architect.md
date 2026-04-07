@@ -40,8 +40,11 @@ For each feature, provide:
 ## Workspace Principles
 
 - Single responsibility per crate
-- `rline-core` has zero external dependencies beyond `ropey`
+- `rline-core` has zero workspace dependencies (only `thiserror`)
+- Dependencies flow inward: `rline-ui` → `rline-core`, `rline-config`, `rline-ai`, `rline-syntax`
 - Every public type and function has a `///` doc comment
 - Prefer composition and traits over complex type hierarchies
 - Use type-safe wrappers for positions (`LineIndex`, `CharOffset`, `ByteOffset`)
 - No circular dependencies — if you find yourself needing one, redesign
+- Background git/IO operations use `std::thread::spawn` + `std::sync::mpsc` + `glib::idle_add_local`
+- Tree-sitter language grammars are feature-gated in `rline-syntax`

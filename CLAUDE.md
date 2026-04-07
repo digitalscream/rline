@@ -57,8 +57,11 @@ Requires Rust 1.85 or later.
 | `anyhow` | Application-level errors (binary crate only) |
 | `tracing` / `tracing-subscriber` | Structured logging (never `println!` in production) |
 | `directories` | XDG-compliant config/data paths |
+| `git2` (0.20) | Git repository operations (status, blame, diff, staging) |
+| `tree-sitter` / `tree-sitter-highlight` (0.25) | Incremental syntax parsing (14 language grammars) |
+| `pango` (0.21) | Text layout and rendering |
 
-**Planned but not yet used**: `ropey` (rope data structure), `tree-sitter` (incremental parsing), `async-openai` (AI API client).
+**Planned but not yet used**: `ropey` (rope data structure), `async-openai` (AI API client).
 
 ## Workspace Architecture
 
@@ -81,12 +84,19 @@ rline/
         error.rs           # ConfigError enum
         paths.rs           # XDG path resolution
         settings.rs        # EditorSettings (theme, font sizes, behavior toggles)
+        syntax_theme.rs    # Rich TextMate scope resolution for imported themes
+        vscode_import.rs   # VS Code theme discovery and conversion to GtkSourceView XML
     rline-ai/              # AI provider abstraction (placeholder — AiProvider trait only)
       src/
         lib.rs
-    rline-syntax/          # Tree-sitter integration (placeholder — no code yet)
+    rline-syntax/          # Tree-sitter integration — incremental syntax highlighting
       src/
-        lib.rs
+        lib.rs             # Crate-level docs, re-exports
+        error.rs           # SyntaxError enum
+        engine.rs          # HighlightEngine (parser + incremental highlighting)
+        languages.rs       # SupportedLanguage enum, extension→grammar mapping (14 languages)
+        scope_map.rs       # Tree-sitter capture names → GtkSourceView style IDs
+        span.rs            # HighlightSpan, IncrementalResult types
     rline-ui/              # GTK4 application — all UI lives here
       src/
         lib.rs             # RlineApplication re-export, run() entry point
@@ -95,11 +105,15 @@ rline/
         error.rs           # UiError enum
         menu.rs            # Hamburger menu (Settings entry)
         shortcuts.rs       # Keyboard accelerator registration
-        theming.rs         # App-wide theme derived from sourceview scheme
+        theming.rs         # App-wide theme derived from sourceview scheme + VS Code UI colors
+        status_bar.rs      # Bottom bar: repo name, branch, git blame for current line
         editor/
           mod.rs
           editor_pane.rs   # Tabbed notebook of EditorTab instances
           tab.rs           # Single sourceview5::View with buffer, language detection, modified indicator
+          find_bar.rs      # Compact overlay find/replace bar (Ctrl+F / Ctrl+H)
+          split_container.rs # Manages 1–2 side-by-side EditorPanes with cross-pane dedup
+          syntax_highlighter.rs # Bridges tree-sitter spans to GtkSourceView TextTags
           settings_dialog.rs # Settings window (theme, fonts, behavior)
         file_browser/
           mod.rs
@@ -111,21 +125,28 @@ rline/
           project_search.rs # Grouped-by-file search results with expand/collapse
           search_worker.rs  # Background file search + file path collection
           quick_open.rs     # Ctrl+P fuzzy file finder dialog
+        git/
+          mod.rs
+          git_panel.rs     # Staged/unstaged file lists with stage/unstage/discard actions
+          git_status_row.rs # Individual file status row widget
+          git_worker.rs    # Background git ops: status, diff, blame, staging, commit
+          diff_tab.rs      # Side-by-side diff view with hunk highlighting
         terminal/
           mod.rs
           terminal_pane.rs # Tabbed notebook of terminal instances
           terminal_tab.rs  # Single VTE terminal with font size support
 ```
 
-Dependency direction flows inward: `rline-ui` → `rline-core`, `rline-config`, `rline-ai`. `rline-core` has no workspace dependencies. No circular dependencies between crates.
+Dependency direction flows inward: `rline-ui` → `rline-core`, `rline-config`, `rline-ai`, `rline-syntax`. `rline-core` has no workspace dependencies. No circular dependencies between crates.
 
-## Current Feature Set (Iteration 1)
+## Current Feature Set
 
 ### Layout
 Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
-- **Left**: `gtk4::Stack` with three tabs (Files, Git placeholder, Search)
+- **Left**: `gtk4::Stack` with three tabs (Files, Git, Search)
 - **Middle**: Vertical split — editor tabs (top) + terminal tabs (bottom)
 - **Right**: AI agent placeholder
+- **Bottom**: Status bar (repo name, branch, git blame)
 
 ### File Browser (left pane, "Files" tab)
 - "Browse" button opens `gtk4::FileDialog` to select project directory
@@ -136,9 +157,30 @@ Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 
 ### Editor (middle pane, top)
 - Tabbed `sourceview5::View` with syntax highlighting and language auto-detection
+- Tree-sitter incremental highlighting bridged to GtkSourceView TextTags (14 languages)
 - Modified indicator ("●" prefix) on tab labels
 - Save/Discard/Cancel dialog on close of modified buffers
 - Line numbers, current-line highlight, configurable tab width
+- Find/replace overlay bar (Ctrl+F / Ctrl+H) using `sourceview5::SearchContext`
+- Vertical split (Ctrl+\) — two side-by-side editor panes with cross-pane file deduplication
+- Tab context menu: Close, Close All, Close Others, Close All Left/Right
+- MRU tab cycling with Ctrl+Tab
+
+### Git Integration (left pane, "Git" tab)
+- Staged and unstaged file lists with status badges (M/A/D/R/C)
+- Stage, unstage, and discard actions per file (single-click buttons)
+- Stage All / Unstage All bulk actions
+- Commit with inline message input
+- Side-by-side diff view with hunk highlighting (opens in editor tab)
+- Auto-refresh when Git tab becomes visible
+- All git operations run on background threads via `git2`
+
+### Status Bar (bottom of window)
+- Repository name (from git workdir)
+- Current branch name
+- Git blame for current cursor line (author, relative time, commit summary)
+- Blame updates debounced (300ms) on background thread
+- Tracks active buffer via cursor-position signal
 
 ### Terminal (middle pane, bottom)
 - Tabbed `vte4::Terminal` widgets with "+" button for new terminals
@@ -157,31 +199,52 @@ Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 - File index collected from project root (capped at 10,000 files)
 
 ### Settings (hamburger menu → Settings)
-- Theme (dropdown of all sourceview5 schemes)
-- Editor font size
+- Theme (dropdown of all sourceview5 schemes + imported VS Code themes)
+- Editor font family and size
 - Terminal font size
+- Tab width, insert spaces, show line numbers, word wrap
+- Tree-sitter highlighting toggle
 - Open last project on startup (toggle)
 - Search auto-expand threshold (spinner)
+- MRU tab cycle depth
 - Persisted as JSON at `~/.config/rline/settings.json`
 - Uses `#[serde(default)]` for forward-compatible deserialization
 
 ### Theming
 - Application chrome color derived from sourceview scheme background
+- VS Code theme import: auto-discovers installed VS Code extensions, converts theme JSON to GtkSourceView XML schemes
+- Rich TextMate scope resolution via `SyntaxTheme` for UI element colors (sidebar, status bar, tabs, etc.)
 - Perceived brightness detection → automatic light/dark text
 - GTK dark theme preference set via `gtk4::Settings::set_gtk_application_prefer_dark_theme`
 - 1px pane separators colored to match theme
+
+### Syntax Highlighting (rline-syntax)
+- Tree-sitter incremental parsing via `HighlightEngine`
+- 14 language grammars (feature-gated): Rust, Python, JavaScript, C, C++, JSON, Bash, HTML, CSS, Markdown, Ruby, YAML, XML, HAML
+- Scope mapping: tree-sitter capture names → GtkSourceView style IDs
+- Incremental re-highlighting on buffer edits
 
 ### Keyboard Shortcuts
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+O | Open file |
+| Ctrl+S | Save file |
 | Ctrl+W | Close current editor tab |
 | Ctrl+P | Quick open (fuzzy file finder) |
+| Ctrl+F | Find in current file |
+| Ctrl+H | Find and replace in current file |
+| Ctrl+\ | Split editor vertically |
+| Ctrl+Tab | Cycle MRU tabs |
+| Ctrl+Q | Quit application |
 | Ctrl+Shift+F | Focus project search |
+| Ctrl+Shift+G | Show git panel |
+| Ctrl+Shift+E | Show files panel |
+| Ctrl+Shift+W | Focus terminal |
 
 ### Startup Behavior
 - Last opened project restored automatically (if enabled in settings)
 - Theme applied globally on startup
+- Status bar populated with repo info on project restore
 
 ## Rust Code Style
 

@@ -30,9 +30,11 @@ Work through each category. Report issues as **Critical**, **Important**, or **S
 
 ### 4. Async & GTK (Critical)
 - [ ] No blocking operations on the GTK main thread
-- [ ] Async results communicated to GTK via `glib::MainContext::channel()`
-- [ ] `glib::clone!(@weak ...)` used in signal handlers
+- [ ] Background I/O uses `std::thread::spawn` + `std::sync::mpsc` + `glib::idle_add_local`
+- [ ] `glib::clone!(#[weak] ...)` used in signal handlers
 - [ ] Previous AI requests cancelled before starting new ones
+- [ ] Deferred updates use `glib::idle_add_local_once` when signal handler state is stale (e.g., during `switch-page`)
+- [ ] Git operations (`git2`) run on background threads, never on GTK main thread
 
 ### 5. API Design (Important)
 - [ ] Private fields with public methods (no public fields on non-data structs)

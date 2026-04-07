@@ -48,7 +48,11 @@ glib::wrapper! {
 
 ```rust
 button.connect_clicked(glib::clone!(
-    @weak text_view, @weak status_bar => move |_| {
+    #[weak]
+    text_view,
+    #[weak]
+    status_bar,
+    move |_| {
         let text = text_view.buffer().text(
             &text_view.buffer().start_iter(),
             &text_view.buffer().end_iter(),
@@ -59,25 +63,39 @@ button.connect_clicked(glib::clone!(
 ));
 ```
 
-### Async → GTK Bridge
+### Background Thread → GTK Bridge (preferred pattern for git/file I/O)
 
 ```rust
-let (sender, receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+let (sender, receiver) = std::sync::mpsc::channel();
 
-// Spawn async work on tokio
-tokio::spawn(async move {
-    let result = do_async_work().await;
+std::thread::spawn(move || {
+    let result = do_blocking_work();
     let _ = sender.send(result);
 });
 
-// Receive results on GTK main thread
-receiver.attach(None, glib::clone!(
-    @weak widget => @default-return glib::ControlFlow::Break,
-    move |result| {
-        widget.handle_result(result);
-        glib::ControlFlow::Continue
+glib::idle_add_local(move || match receiver.try_recv() {
+    Ok(result) => { /* update UI */ glib::ControlFlow::Break }
+    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+    Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+});
+```
+
+### Debounced Background Updates (e.g., git blame on cursor move)
+
+```rust
+// Store a pending timeout source ID to cancel on re-trigger
+let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+
+buffer.connect_notify_local(Some("cursor-position"), move |buf, _| {
+    if let Some(source_id) = pending.borrow_mut().take() {
+        source_id.remove();
     }
-));
+    let source_id = glib::timeout_add_local_once(
+        std::time::Duration::from_millis(300),
+        move || { /* spawn background work */ },
+    );
+    pending.borrow_mut().replace(source_id);
+});
 ```
 
 ### Keyboard Input
@@ -106,8 +124,9 @@ widget.add_controller(key_controller);
 When asked to build UI:
 1. Determine which GTK4 widgets are appropriate (prefer standard widgets over custom drawing)
 2. Design the widget hierarchy and layout
-3. Set up signal handlers with proper reference management
-4. Bridge any async operations through `glib::MainContext::channel()`
-5. Add CSS class names for theming
-6. Handle keyboard shortcuts via EventControllers
-7. Ensure all widgets are properly unparented on disposal
+3. Set up signal handlers with proper reference management (`#[weak]` in closures)
+4. Bridge blocking operations through `std::thread::spawn` + `glib::idle_add_local` (git, file I/O)
+5. Add CSS class names for theming — update `theming.rs` to style new elements, using VS Code UI color keys when available
+6. Handle keyboard shortcuts via EventControllers — register accelerators in `shortcuts.rs`
+7. Use single-click (`GestureClick`) for all interactive lists — never `connect_activate`
+8. For deferred updates during signal handlers (e.g., `switch-page`), use `glib::idle_add_local_once` to avoid stale state

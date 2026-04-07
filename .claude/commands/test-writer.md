@@ -86,6 +86,23 @@ For every public function, test:
 - Valid config file parsing
 - Missing optional fields (defaults applied)
 - Invalid values (proper error, not panic)
+- VS Code theme import: valid theme JSON, missing fields, malformed JSON
+- SyntaxTheme scope resolution: exact match, hierarchical fallback, no match
+
+**Git operations:**
+- Clean repo status, modified/added/deleted files
+- Stage and unstage round-trip
+- Discard restores original content
+- Diff hunks for staged and unstaged changes
+- Blame for committed lines, uncommitted files
+- Repo info extraction (name, branch)
+- Use `tempfile` + `git2::Repository::init` for test repos
+
+**Syntax highlighting:**
+- Parse and highlight for each supported language
+- Incremental reparse after edits
+- Empty source handling
+- Unknown file extensions return no language
 
 ## Conventions
 
