@@ -1,0 +1,24 @@
+[package]
+name = "rline-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rline-core = { path = "../rline-core" }
+rline-config = { path = "../rline-config" }
+rline-ai = { path = "../rline-ai" }
+rline-syntax = { path = "../rline-syntax" }
+gtk4 = { workspace = true }
+pango = "0.21"
+sourceview5 = { workspace = true }
+vte4 = { workspace = true }
+glib = { workspace = true }
+gio = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+git2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

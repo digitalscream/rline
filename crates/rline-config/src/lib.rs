@@ -1,0 +1,11 @@
+//! rline-config — Configuration parsing, settings persistence, and XDG path resolution.
+
+pub mod error;
+pub mod paths;
+pub mod settings;
+pub mod syntax_theme;
+pub mod vscode_import;
+
+pub use error::ConfigError;
+pub use settings::EditorSettings;
+pub use syntax_theme::SyntaxTheme;
