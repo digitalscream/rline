@@ -57,7 +57,7 @@ impl SettingsDialog {
         let font_label = gtk4::Label::new(Some("Editor Font Size"));
         font_label.set_hexpand(true);
         font_label.set_halign(gtk4::Align::Start);
-        let font_spin = gtk4::SpinButton::with_range(8.0, 72.0, 1.0);
+        let font_spin = gtk4::SpinButton::with_range(5.0, 72.0, 1.0);
         font_spin.set_value(settings.font_size as f64);
         font_row.append(&font_label);
         font_row.append(&font_spin);
@@ -67,7 +67,7 @@ impl SettingsDialog {
         let term_font_label = gtk4::Label::new(Some("Terminal Font Size"));
         term_font_label.set_hexpand(true);
         term_font_label.set_halign(gtk4::Align::Start);
-        let term_font_spin = gtk4::SpinButton::with_range(8.0, 72.0, 1.0);
+        let term_font_spin = gtk4::SpinButton::with_range(5.0, 72.0, 1.0);
         term_font_spin.set_value(settings.terminal_font_size as f64);
         term_font_row.append(&term_font_label);
         term_font_row.append(&term_font_spin);
