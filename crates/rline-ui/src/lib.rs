@@ -4,6 +4,7 @@ mod app;
 pub mod editor;
 pub mod error;
 pub mod file_browser;
+pub mod git;
 mod menu;
 pub mod search;
 mod shortcuts;

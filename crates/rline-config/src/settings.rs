@@ -19,6 +19,9 @@ pub struct EditorSettings {
     pub font_size: u32,
     /// Tab width in spaces.
     pub tab_width: u32,
+    /// Whether to insert spaces instead of tab characters.
+    #[serde(default = "default_true")]
+    pub insert_spaces: bool,
     /// Whether to show line numbers.
     pub show_line_numbers: bool,
     /// Whether to wrap text.
@@ -48,6 +51,7 @@ impl Default for EditorSettings {
             editor_font_family: "Monospace".to_owned(),
             font_size: 13,
             tab_width: 4,
+            insert_spaces: true,
             show_line_numbers: true,
             wrap_text: false,
             terminal_font_family: "Monospace".to_owned(),
@@ -151,6 +155,7 @@ mod tests {
             editor_font_family: "Fira Code".to_owned(),
             font_size: 16,
             tab_width: 2,
+            insert_spaces: false,
             show_line_numbers: false,
             wrap_text: true,
             terminal_font_family: "JetBrains Mono".to_owned(),

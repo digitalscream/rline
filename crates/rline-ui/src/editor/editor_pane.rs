@@ -1,4 +1,4 @@
-//! EditorPane — tabbed notebook of editor views.
+//! EditorPane — tabbed notebook of editor views and diff views.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,15 +12,48 @@ use rline_core::LineIndex;
 
 use super::tab::EditorTab;
 use crate::error::UiError;
+use crate::git::git_worker::FileDiff;
+use crate::git::DiffTab;
+
+/// A tab in the editor pane — either a regular editor or a side-by-side diff.
+#[derive(Debug, Clone)]
+enum TabKind {
+    /// A regular editable file tab.
+    Editor(EditorTab),
+    /// A read-only side-by-side diff view.
+    Diff(DiffTab),
+}
+
+impl TabKind {
+    /// A dedup key distinguishing editor tabs from diff tabs for the same file.
+    fn dedup_key(&self) -> Option<PathBuf> {
+        match self {
+            Self::Editor(tab) => tab.file_path().map(|p| p.canonicalize().unwrap_or(p)),
+            Self::Diff(tab) => {
+                let mut key = PathBuf::from("diff:");
+                key.push(tab.file_path());
+                Some(key)
+            }
+        }
+    }
+
+    /// Apply settings to the tab.
+    fn apply_settings(&self, settings: &EditorSettings) {
+        match self {
+            Self::Editor(tab) => tab.apply_settings(settings),
+            Self::Diff(tab) => tab.apply_settings(settings),
+        }
+    }
+}
 
 /// The editor pane containing a notebook of editor tabs.
 #[derive(Debug, Clone)]
 pub struct EditorPane {
     container: gtk4::Box,
     notebook: gtk4::Notebook,
-    /// Maps file paths to notebook page indices.
-    tabs: Rc<RefCell<Vec<EditorTab>>>,
-    /// Map from canonical path to tab index for deduplication.
+    /// All tabs (editor and diff).
+    tabs: Rc<RefCell<Vec<TabKind>>>,
+    /// Map from dedup key to tab index.
     path_to_index: Rc<RefCell<HashMap<PathBuf, usize>>>,
     settings: Rc<RefCell<EditorSettings>>,
     /// Most-recently-used tab indices (front = most recent).
@@ -159,8 +192,38 @@ impl EditorPane {
         self.notebook.set_tab_reorderable(tab.widget(), true);
 
         let idx = page_idx as usize;
-        self.tabs.borrow_mut().push(tab);
+        self.tabs.borrow_mut().push(TabKind::Editor(tab));
         self.path_to_index.borrow_mut().insert(canonical, idx);
+
+        self.notebook.set_current_page(Some(page_idx));
+        Ok(())
+    }
+
+    /// Open a side-by-side diff view for a file, or focus an existing one.
+    pub fn open_diff(&self, path: &Path, diff: &FileDiff) -> Result<(), UiError> {
+        // Dedup key for diff tabs.
+        let mut dedup_key = PathBuf::from("diff:");
+        dedup_key.push(path);
+
+        {
+            let index_map = self.path_to_index.borrow();
+            if let Some(&idx) = index_map.get(&dedup_key) {
+                self.notebook.set_current_page(Some(idx as u32));
+                return Ok(());
+            }
+        }
+
+        let settings = self.settings.borrow();
+        let tab = DiffTab::load_diff(path, diff, &settings);
+
+        let page_idx = self
+            .notebook
+            .append_page(tab.widget(), Some(tab.tab_label()));
+        self.notebook.set_tab_reorderable(tab.widget(), true);
+
+        let idx = page_idx as usize;
+        self.tabs.borrow_mut().push(TabKind::Diff(tab));
+        self.path_to_index.borrow_mut().insert(dedup_key, idx);
 
         self.notebook.set_current_page(Some(page_idx));
         Ok(())
@@ -172,7 +235,7 @@ impl EditorPane {
         // After opening, the tab is focused — find it and goto line
         if let Some(current) = self.notebook.current_page() {
             let tabs = self.tabs.borrow();
-            if let Some(tab) = tabs.get(current as usize) {
+            if let Some(TabKind::Editor(tab)) = tabs.get(current as usize) {
                 tab.goto_line(line);
             }
         }
@@ -184,7 +247,7 @@ impl EditorPane {
         if let Some(page_num) = self.notebook.current_page() {
             let idx = page_num as usize;
             let tabs = self.tabs.borrow();
-            if let Some(tab) = tabs.get(idx) {
+            if let Some(TabKind::Editor(tab)) = tabs.get(idx) {
                 if tab.is_modified() {
                     // Show save confirmation dialog
                     let notebook = self.notebook.clone();
@@ -248,6 +311,7 @@ impl EditorPane {
                     return;
                 }
             }
+            // Diff tabs and unmodified editor tabs close immediately.
             drop(tabs);
             Self::remove_tab(
                 &self.notebook,
@@ -273,7 +337,7 @@ impl EditorPane {
     pub fn show_find_bar(&self, with_replace: bool) {
         if let Some(page) = self.notebook.current_page() {
             let tabs = self.tabs.borrow();
-            if let Some(tab) = tabs.get(page as usize) {
+            if let Some(TabKind::Editor(tab)) = tabs.get(page as usize) {
                 tab.show_find_bar(with_replace);
             }
         }
@@ -286,7 +350,7 @@ impl EditorPane {
 
     fn remove_tab(
         notebook: &gtk4::Notebook,
-        tabs: &Rc<RefCell<Vec<EditorTab>>>,
+        tabs: &Rc<RefCell<Vec<TabKind>>>,
         path_map: &Rc<RefCell<HashMap<PathBuf, usize>>>,
         mru: &Rc<RefCell<Vec<u32>>>,
         page_num: u32,
@@ -295,24 +359,22 @@ impl EditorPane {
         let mut tabs_vec = tabs.borrow_mut();
         if idx < tabs_vec.len() {
             let removed = tabs_vec.remove(idx);
-            // Remove from path map
-            if let Some(path) = removed.file_path() {
-                let canonical = path.canonicalize().unwrap_or(path);
-                path_map.borrow_mut().remove(&canonical);
+            // Remove from path map using the dedup key.
+            if let Some(key) = removed.dedup_key() {
+                path_map.borrow_mut().remove(&key);
             }
-            // Rebuild index map
+            // Rebuild index map.
             let mut map = path_map.borrow_mut();
             map.clear();
             for (i, tab) in tabs_vec.iter().enumerate() {
-                if let Some(p) = tab.file_path() {
-                    let canonical = p.canonicalize().unwrap_or(p);
-                    map.insert(canonical, i);
+                if let Some(key) = tab.dedup_key() {
+                    map.insert(key, i);
                 }
             }
         }
         notebook.remove_page(Some(page_num));
 
-        // Update MRU: remove the closed tab and adjust indices for tabs that shifted
+        // Update MRU: remove the closed tab and adjust indices for tabs that shifted.
         let mut mru_list = mru.borrow_mut();
         mru_list.retain(|&p| p != page_num);
         for p in mru_list.iter_mut() {

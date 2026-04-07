@@ -84,6 +84,19 @@ impl SettingsDialog {
         font_spin.set_value(settings.font_size as f64);
         font_row.append(&font_spin);
 
+        // ── Tab width ──
+        let tab_width_row = Self::make_row("Tab Width");
+        let tab_width_spin = gtk4::SpinButton::with_range(1.0, 16.0, 1.0);
+        tab_width_spin.set_value(settings.tab_width as f64);
+        tab_width_row.append(&tab_width_spin);
+
+        // ── Insert spaces instead of tabs ──
+        let insert_spaces_row = Self::make_row("Insert Spaces");
+        let insert_spaces_switch = gtk4::Switch::new();
+        insert_spaces_switch.set_active(settings.insert_spaces);
+        insert_spaces_switch.set_valign(gtk4::Align::Center);
+        insert_spaces_row.append(&insert_spaces_switch);
+
         // ── Terminal font family ──
         let term_font_fam_row = Self::make_row("Terminal Font");
         let term_font_dropdown = gtk4::DropDown::from_strings(&mono_strs);
@@ -143,6 +156,8 @@ impl SettingsDialog {
         content.append(&import_row);
         content.append(&editor_font_row);
         content.append(&font_row);
+        content.append(&tab_width_row);
+        content.append(&insert_spaces_row);
         content.append(&term_font_fam_row);
         content.append(&term_font_row);
         content.append(&last_project_row);
@@ -174,6 +189,8 @@ impl SettingsDialog {
                 move |theme_dropdown: &gtk4::DropDown,
                       editor_font_dropdown: &gtk4::DropDown,
                       font_spin: &gtk4::SpinButton,
+                      tab_width_spin: &gtk4::SpinButton,
+                      insert_spaces_switch: &gtk4::Switch,
                       term_font_dropdown: &gtk4::DropDown,
                       term_font_spin: &gtk4::SpinButton,
                       last_project_switch: &gtk4::Switch,
@@ -204,6 +221,8 @@ impl SettingsDialog {
                         theme,
                         editor_font_family: editor_font,
                         font_size: font_spin.value() as u32,
+                        tab_width: tab_width_spin.value() as u32,
+                        insert_spaces: insert_spaces_switch.is_active(),
                         terminal_font_family: terminal_font,
                         terminal_font_size: term_font_spin.value() as u32,
                         open_last_project: last_project_switch.is_active(),
@@ -232,6 +251,10 @@ impl SettingsDialog {
             #[weak]
             font_spin,
             #[weak]
+            tab_width_spin,
+            #[weak]
+            insert_spaces_switch,
+            #[weak]
             term_font_dropdown,
             #[weak]
             term_font_spin,
@@ -248,6 +271,8 @@ impl SettingsDialog {
                     &theme_dropdown,
                     &editor_font_dropdown,
                     &font_spin,
+                    &tab_width_spin,
+                    &insert_spaces_switch,
                     &term_font_dropdown,
                     &term_font_spin,
                     &last_project_switch,
@@ -269,6 +294,10 @@ impl SettingsDialog {
             #[weak]
             font_spin,
             #[weak]
+            tab_width_spin,
+            #[weak]
+            insert_spaces_switch,
+            #[weak]
             term_font_dropdown,
             #[weak]
             term_font_spin,
@@ -285,6 +314,8 @@ impl SettingsDialog {
                     &theme_dropdown,
                     &editor_font_dropdown,
                     &font_spin,
+                    &tab_width_spin,
+                    &insert_spaces_switch,
                     &term_font_dropdown,
                     &term_font_spin,
                     &last_project_switch,

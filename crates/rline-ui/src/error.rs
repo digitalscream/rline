@@ -20,4 +20,8 @@ pub enum UiError {
         #[source]
         source: std::io::Error,
     },
+
+    /// A git operation failed.
+    #[error("git error: {0}")]
+    Git(#[from] git2::Error),
 }

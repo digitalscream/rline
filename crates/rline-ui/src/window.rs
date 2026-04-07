@@ -8,6 +8,7 @@ use gtk4::subclass::prelude::*;
 
 use crate::editor::EditorPane;
 use crate::file_browser::FileBrowserPanel;
+use crate::git::GitPanel;
 use crate::menu;
 use crate::search::ProjectSearchPanel;
 use crate::terminal::TerminalPane;
@@ -22,6 +23,7 @@ mod imp {
         pub editor_pane: RefCell<Option<EditorPane>>,
         pub file_browser: RefCell<Option<FileBrowserPanel>>,
         pub search_panel: RefCell<Option<ProjectSearchPanel>>,
+        pub git_panel: RefCell<Option<GitPanel>>,
         pub terminal_pane: RefCell<Option<TerminalPane>>,
         pub left_stack: RefCell<Option<gtk4::Stack>>,
         pub project_root: RefCell<Option<PathBuf>>,
@@ -129,11 +131,10 @@ impl RlineWindow {
 
         let file_browser = FileBrowserPanel::new();
         let search_panel = ProjectSearchPanel::new();
-        let git_placeholder = gtk4::Label::new(Some("Git (coming soon)"));
-        git_placeholder.set_vexpand(true);
+        let git_panel = GitPanel::new();
 
         stack.add_titled(file_browser.widget(), Some("files"), "Files");
-        stack.add_titled(&git_placeholder, Some("git"), "Git");
+        stack.add_titled(git_panel.widget(), Some("git"), "Git");
         stack.add_titled(search_panel.widget(), Some("search"), "Search");
 
         let switcher = gtk4::StackSwitcher::new();
@@ -190,12 +191,33 @@ impl RlineWindow {
         crate::theming::apply_app_theme(&settings.theme);
 
         // ── Wire cross-component callbacks ──
-        self.wire_file_browser(&file_browser, &editor_pane, &terminal_pane, &search_panel);
+        self.wire_file_browser(
+            &file_browser,
+            &editor_pane,
+            &terminal_pane,
+            &search_panel,
+            &git_panel,
+        );
+        self.wire_git_panel(&git_panel, &editor_pane);
+
+        // Wire action buttons (needs the window reference for confirmation dialogs).
+        git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
+
+        // Auto-refresh git panel when the tab becomes visible.
+        let gp_for_stack = git_panel.clone();
+        stack.connect_notify_local(Some("visible-child-name"), move |stack, _| {
+            if let Some(name) = stack.visible_child_name() {
+                if name == "git" {
+                    gp_for_stack.refresh();
+                }
+            }
+        });
 
         // ── Store references ──
         imp.editor_pane.replace(Some(editor_pane));
         imp.file_browser.replace(Some(file_browser.clone()));
         imp.search_panel.replace(Some(search_panel));
+        imp.git_panel.replace(Some(git_panel));
         imp.terminal_pane.replace(Some(terminal_pane));
         imp.left_stack.replace(Some(stack));
 
@@ -212,13 +234,14 @@ impl RlineWindow {
     }
 
     /// Wire the file browser's open callback to the editor pane, and project root
-    /// changes to terminal + search.
+    /// changes to terminal, search, and git.
     fn wire_file_browser(
         &self,
         file_browser: &FileBrowserPanel,
         editor_pane: &EditorPane,
         terminal_pane: &TerminalPane,
         search_panel: &ProjectSearchPanel,
+        git_panel: &GitPanel,
     ) {
         // Single-click opens file in editor
         let ep = editor_pane.clone();
@@ -236,9 +259,10 @@ impl RlineWindow {
             }
         });
 
-        // Project root changes update terminal + search + persist last project
+        // Project root changes update terminal + search + git + persist last project
         let tp = terminal_pane.clone();
         let sp = search_panel.clone();
+        let gp = git_panel.clone();
         file_browser.set_on_project_root_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -247,6 +271,7 @@ impl RlineWindow {
                 window.imp().project_root.replace(Some(root.to_path_buf()));
                 tp.set_default_directory(root);
                 sp.set_project_root(root);
+                gp.set_project_root(root);
 
                 // Persist last project path for next startup
                 if let Ok(mut settings) = rline_config::EditorSettings::load() {
@@ -257,6 +282,47 @@ impl RlineWindow {
                 }
             }
         ));
+    }
+
+    /// Wire the git panel's diff callback to the editor pane.
+    fn wire_git_panel(&self, git_panel: &GitPanel, editor_pane: &EditorPane) {
+        let ep = editor_pane.clone();
+        let gp = git_panel.clone();
+
+        git_panel.set_on_open_diff(move |path, is_staged| {
+            let root = match gp.project_root() {
+                Some(r) => r,
+                None => return,
+            };
+            let path = path.to_path_buf();
+            let (sender, receiver) =
+                std::sync::mpsc::channel::<Result<crate::git::git_worker::FileDiff, String>>();
+
+            let path_for_thread = path.clone();
+            std::thread::spawn(move || {
+                let result =
+                    crate::git::git_worker::get_file_diff(&root, &path_for_thread, is_staged)
+                        .map_err(|e| e.to_string());
+                let _ = sender.send(result);
+            });
+
+            let ep_clone = ep.clone();
+            let path_for_ui = path.clone();
+            glib::idle_add_local(move || match receiver.try_recv() {
+                Ok(Ok(diff)) => {
+                    if let Err(e) = ep_clone.open_diff(&path_for_ui, &diff) {
+                        tracing::error!("failed to open diff: {e}");
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("git diff failed: {e}");
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            });
+        });
     }
 
     /// Set up window-level actions for keyboard shortcuts.

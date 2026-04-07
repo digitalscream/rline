@@ -193,6 +193,16 @@ pub fn apply_app_theme(scheme_id: &str) {
                     border: 1px solid {input_border};
                     box-shadow: none;
                 }}
+                textview.commit-input {{
+                    background: {input_bg};
+                    color: {fg};
+                    border: 1px solid {input_border};
+                    border-radius: 6px;
+                }}
+                textview.commit-input text {{
+                    background: transparent;
+                    color: {fg};
+                }}
                 searchentry text {{
                     color: {fg};
                 }}
@@ -266,8 +276,23 @@ pub fn apply_app_theme(scheme_id: &str) {
         }
     };
 
+    // Append git status badge colors and compact list row spacing.
+    let git_css = r#"
+        .git-status-m { color: #e2c08d; }
+        .git-status-a { color: #73c991; }
+        .git-status-d { color: #c74e39; }
+        .git-status-r { color: #73b8e2; }
+        .git-status-c { color: #e06c75; }
+        listview.compact-list > row { padding: 0; min-height: 0; }
+        listview.compact-list > row > cell { padding: 0; margin: 0; min-height: 0; }
+        listview.compact-list button.circular { min-height: 16px; min-width: 16px; padding: 0; margin: 0; }
+        textview.commit-input { border-radius: 6px; }
+        textview.commit-input text { background: transparent; }
+    "#;
+    let full_css = format!("{css}\n{git_css}");
+
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(&css);
+    provider.load_from_data(&full_css);
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(

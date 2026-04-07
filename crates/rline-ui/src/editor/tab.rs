@@ -48,6 +48,7 @@ impl EditorTab {
         view.set_tab_width(settings.tab_width);
         view.set_auto_indent(true);
         view.set_indent_width(settings.tab_width as i32);
+        view.set_insert_spaces_instead_of_tabs(settings.insert_spaces);
         view.set_highlight_current_line(true);
         view.set_monospace(true);
         view.set_vexpand(true);
@@ -214,6 +215,9 @@ impl EditorTab {
     pub fn apply_settings(&self, settings: &EditorSettings) {
         self.view.set_show_line_numbers(settings.show_line_numbers);
         self.view.set_tab_width(settings.tab_width);
+        self.view.set_indent_width(settings.tab_width as i32);
+        self.view
+            .set_insert_spaces_instead_of_tabs(settings.insert_spaces);
         if settings.wrap_text {
             self.view.set_wrap_mode(gtk4::WrapMode::Word);
         } else {
