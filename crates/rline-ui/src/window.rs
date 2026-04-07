@@ -445,6 +445,17 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.show-shortcuts
+        let action_shortcuts = gio::ActionEntry::builder("show-shortcuts")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    window.action_show_shortcuts();
+                }
+            ))
+            .build();
+
         // win.quit-app (Ctrl+Q)
         let action_quit = gio::ActionEntry::builder("quit-app")
             .activate(glib::clone!(
@@ -547,6 +558,7 @@ impl RlineWindow {
             action_quick_open,
             action_search,
             action_settings,
+            action_shortcuts,
             action_quit,
             action_show_git,
             action_show_files,
@@ -658,6 +670,12 @@ impl RlineWindow {
         if let Some(ref search) = *imp.search_panel.borrow() {
             search.focus_entry();
         }
+    }
+
+    fn action_show_shortcuts(&self) {
+        let dialog =
+            crate::shortcuts_dialog::build_shortcuts_dialog(self.upcast_ref::<gtk4::Window>());
+        dialog.present();
     }
 
     fn action_show_settings(&self) {

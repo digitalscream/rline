@@ -8,6 +8,7 @@ pub mod git;
 mod menu;
 pub mod search;
 mod shortcuts;
+mod shortcuts_dialog;
 pub mod status_bar;
 pub mod terminal;
 pub mod theming;
