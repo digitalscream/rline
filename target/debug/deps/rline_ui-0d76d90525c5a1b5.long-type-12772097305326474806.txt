@@ -1,0 +1,1 @@
+glib::subclass::basic::InstanceStruct<app::imp::RlineApplication>: gtk4::subclass::prelude::InstanceStruct
