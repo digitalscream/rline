@@ -1,1 +1,0 @@
-glib::subclass::basic::ClassStruct<window::imp::RlineWindow>: gtk4::subclass::prelude::ClassStruct
