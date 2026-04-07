@@ -59,9 +59,6 @@ impl TerminalPane {
             pane_clone.add_terminal(None);
         });
 
-        // Add one default terminal
-        pane.add_terminal(None);
-
         pane
     }
 

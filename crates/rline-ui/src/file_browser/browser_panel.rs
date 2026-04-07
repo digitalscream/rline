@@ -209,6 +209,8 @@ impl FileBrowserPanel {
     fn setup_context_menu(&self) {
         let menu_model = gio::Menu::new();
         menu_model.append(Some("Open"), Some("filebrowser.open"));
+        menu_model.append(Some("New File"), Some("filebrowser.new-file"));
+        menu_model.append(Some("New Folder"), Some("filebrowser.new-folder"));
         menu_model.append(Some("Rename"), Some("filebrowser.rename"));
         menu_model.append(Some("Delete"), Some("filebrowser.delete"));
 
@@ -216,34 +218,79 @@ impl FileBrowserPanel {
         popover.set_parent(&self.list_view);
         popover.set_has_arrow(false);
 
+        // The node that was right-clicked (None when clicking empty space).
+        let right_clicked_node: Rc<RefCell<Option<FileNode>>> = Rc::new(RefCell::new(None));
+
         // Action group
         let action_group = gio::SimpleActionGroup::new();
 
         let open_cb = self.on_open_file.clone();
+        let rc_open = right_clicked_node.clone();
         let open_action = gio::SimpleAction::new("open", None);
-        open_action.connect_activate(glib::clone!(
-            #[weak(rename_to = lv_open)]
-            self.list_view,
-            move |_, _| {
-                if let Some(node) = get_selected_node(&lv_open) {
-                    if !node.is_directory() {
-                        let path = PathBuf::from(node.path());
-                        if let Some(ref cb) = *open_cb.borrow() {
-                            cb(&path);
-                        }
+        open_action.connect_activate(move |_, _| {
+            if let Some(ref node) = *rc_open.borrow() {
+                if !node.is_directory() {
+                    let path = PathBuf::from(node.path());
+                    if let Some(ref cb) = *open_cb.borrow() {
+                        cb(&path);
                     }
                 }
             }
-        ));
+        });
         action_group.add_action(&open_action);
 
+        let root_new_file = self.project_root.clone();
+        let open_cb_new = self.on_open_file.clone();
+        let rc_new_file = right_clicked_node.clone();
+        let new_file_action = gio::SimpleAction::new("new-file", None);
+        new_file_action.connect_activate(glib::clone!(
+            #[weak(rename_to = lv)]
+            self.list_view,
+            move |_, _| {
+                let parent_dir = context_directory_from_node(&rc_new_file.borrow(), &root_new_file);
+                if let Some(parent) = parent_dir {
+                    let open_cb_for_dialog = open_cb_new.clone();
+                    let root_for_refresh = root_new_file.clone();
+                    let lv_for_refresh = lv.clone();
+                    show_new_entry_dialog(&lv, "New File", &parent, false, move |created_path| {
+                        refresh_tree(&root_for_refresh, &lv_for_refresh);
+                        if let Some(ref cb) = *open_cb_for_dialog.borrow() {
+                            cb(&created_path);
+                        }
+                    });
+                }
+            }
+        ));
+        action_group.add_action(&new_file_action);
+
+        let root_new_folder = self.project_root.clone();
+        let rc_new_folder = right_clicked_node.clone();
+        let new_folder_action = gio::SimpleAction::new("new-folder", None);
+        new_folder_action.connect_activate(glib::clone!(
+            #[weak(rename_to = lv)]
+            self.list_view,
+            move |_, _| {
+                let parent_dir =
+                    context_directory_from_node(&rc_new_folder.borrow(), &root_new_folder);
+                if let Some(parent) = parent_dir {
+                    let root_for_refresh = root_new_folder.clone();
+                    let lv_for_refresh = lv.clone();
+                    show_new_entry_dialog(&lv, "New Folder", &parent, true, move |_| {
+                        refresh_tree(&root_for_refresh, &lv_for_refresh);
+                    });
+                }
+            }
+        ));
+        action_group.add_action(&new_folder_action);
+
         let root_ref = self.project_root.clone();
+        let rc_rename = right_clicked_node.clone();
         let rename_action = gio::SimpleAction::new("rename", None);
         rename_action.connect_activate(glib::clone!(
             #[weak(rename_to = lv_rename)]
             self.list_view,
             move |_, _| {
-                if let Some(node) = get_selected_node(&lv_rename) {
+                if let Some(ref node) = *rc_rename.borrow() {
                     let old_path = PathBuf::from(node.path());
                     let old_name = node.name();
 
@@ -260,8 +307,6 @@ impl FileBrowserPanel {
                     let lv_for_refresh = lv_rename.clone();
                     dialog.choose(window.as_ref(), gio::Cancellable::NONE, move |result| {
                         if let Ok(1) = result {
-                            // For rename, we need an entry dialog — AlertDialog doesn't support text input.
-                            // Use a simple approach: create a small window with an entry.
                             show_rename_dialog(
                                 &old_path,
                                 &old_name,
@@ -276,12 +321,13 @@ impl FileBrowserPanel {
         action_group.add_action(&rename_action);
 
         let root_del = self.project_root.clone();
+        let rc_delete = right_clicked_node.clone();
         let delete_action = gio::SimpleAction::new("delete", None);
         delete_action.connect_activate(glib::clone!(
             #[weak(rename_to = lv_delete)]
             self.list_view,
             move |_, _| {
-                if let Some(node) = get_selected_node(&lv_delete) {
+                if let Some(ref node) = *rc_delete.borrow() {
                     let path = PathBuf::from(node.path());
                     let name = node.name();
                     let is_dir = node.is_directory();
@@ -320,13 +366,20 @@ impl FileBrowserPanel {
         self.list_view
             .insert_action_group("filebrowser", Some(&action_group));
 
-        // Right-click gesture
+        // Right-click gesture — identify the node under the cursor before showing
+        // the context menu so that actions operate on the right-clicked item.
         let gesture = gtk4::GestureClick::new();
         gesture.set_button(3); // Right click
         gesture.connect_pressed(glib::clone!(
             #[weak]
             popover,
+            #[weak(rename_to = lv)]
+            self.list_view,
+            #[strong]
+            right_clicked_node,
             move |gesture, _, x, y| {
+                right_clicked_node.replace(find_node_at_position(&lv, x, y));
+
                 let point = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
                 popover.set_pointing_to(Some(&point));
                 popover.popup();
@@ -352,6 +405,141 @@ fn refresh_tree(root_ref: &Rc<RefCell<Option<PathBuf>>>, list_view: &gtk4::ListV
         let selection = gtk4::SingleSelection::new(Some(tree_model));
         list_view.set_model(Some(&selection));
     }
+}
+
+/// Walk the widget tree upward from `widget` to find a `TreeExpander`, then extract
+/// the `FileNode` from its `TreeListRow`.
+fn node_from_widget(widget: &gtk4::Widget) -> Option<FileNode> {
+    let mut current: Option<gtk4::Widget> = Some(widget.clone());
+    while let Some(w) = current {
+        if let Some(expander) = w.downcast_ref::<gtk4::TreeExpander>() {
+            let row = expander.list_row()?;
+            return row.item().and_downcast::<FileNode>();
+        }
+        current = w.parent();
+    }
+    None
+}
+
+/// Find the `FileNode` rendered at the given (x, y) coordinates in the list view.
+/// Returns `None` when the click lands on empty space.
+fn find_node_at_position(list_view: &gtk4::ListView, x: f64, y: f64) -> Option<FileNode> {
+    let widget = list_view.pick(x, y, gtk4::PickFlags::DEFAULT)?;
+    node_from_widget(&widget)
+}
+
+/// Determine the parent directory for a new file/folder based on the right-clicked node.
+///
+/// If a directory was right-clicked, returns that directory. If a file was right-clicked,
+/// returns its parent. Falls back to the project root when clicking empty space.
+fn context_directory_from_node(
+    node: &Option<FileNode>,
+    root_ref: &Rc<RefCell<Option<PathBuf>>>,
+) -> Option<PathBuf> {
+    if let Some(ref node) = *node {
+        let path = PathBuf::from(node.path());
+        if node.is_directory() {
+            return Some(path);
+        }
+        return path.parent().map(|p| p.to_path_buf());
+    }
+    root_ref.borrow().clone()
+}
+
+/// Show a dialog to create a new file or folder.
+fn show_new_entry_dialog<F: Fn(PathBuf) + 'static>(
+    list_view: &gtk4::ListView,
+    title: &str,
+    parent_dir: &Path,
+    is_folder: bool,
+    on_created: F,
+) {
+    let title = title.to_owned();
+    let window = gtk4::Window::builder()
+        .title(&title)
+        .default_width(300)
+        .default_height(100)
+        .modal(true)
+        .build();
+
+    if let Some(parent) = list_view.root().and_downcast::<gtk4::Window>() {
+        window.set_transient_for(Some(&parent));
+    }
+
+    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    vbox.set_margin_top(12);
+    vbox.set_margin_bottom(12);
+    vbox.set_margin_start(12);
+    vbox.set_margin_end(12);
+
+    let entry = gtk4::Entry::new();
+    entry.set_placeholder_text(Some(if is_folder {
+        "Folder name"
+    } else {
+        "File name"
+    }));
+    vbox.append(&entry);
+
+    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    btn_box.set_halign(gtk4::Align::End);
+    let cancel_btn = gtk4::Button::with_label("Cancel");
+    let create_btn = gtk4::Button::with_label("Create");
+    create_btn.add_css_class("suggested-action");
+    btn_box.append(&cancel_btn);
+    btn_box.append(&create_btn);
+    vbox.append(&btn_box);
+
+    window.set_child(Some(&vbox));
+
+    cancel_btn.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| window.close()
+    ));
+
+    let parent_dir = parent_dir.to_path_buf();
+    create_btn.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        #[weak]
+        entry,
+        move |_| {
+            let name = entry.text().to_string();
+            if name.is_empty() {
+                window.close();
+                return;
+            }
+            let new_path = parent_dir.join(&name);
+            let result = if is_folder {
+                std::fs::create_dir_all(&new_path)
+            } else {
+                // Ensure parent directories exist, then create the file
+                if let Some(p) = new_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(p) {
+                        tracing::error!("failed to create parent dirs: {e}");
+                        window.close();
+                        return;
+                    }
+                }
+                std::fs::File::create(&new_path).map(|_| ())
+            };
+
+            match result {
+                Ok(()) => on_created(new_path),
+                Err(e) => tracing::error!("failed to create {}: {e}", name),
+            }
+            window.close();
+        }
+    ));
+
+    // Allow pressing Enter to confirm
+    let create_for_enter = create_btn.clone();
+    entry.connect_activate(move |_| {
+        create_for_enter.emit_clicked();
+    });
+
+    window.present();
+    entry.grab_focus();
 }
 
 fn show_rename_dialog(

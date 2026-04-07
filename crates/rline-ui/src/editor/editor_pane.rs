@@ -242,6 +242,18 @@ impl EditorPane {
         Ok(())
     }
 
+    /// Save the currently focused editor tab.
+    pub fn save_current_tab(&self) {
+        if let Some(page_num) = self.notebook.current_page() {
+            let tabs = self.tabs.borrow();
+            if let Some(TabKind::Editor(tab)) = tabs.get(page_num as usize) {
+                if let Err(e) = tab.save() {
+                    tracing::error!("failed to save: {e}");
+                }
+            }
+        }
+    }
+
     /// Close the currently focused editor tab.
     pub fn close_current_tab(&self) {
         if let Some(page_num) = self.notebook.current_page() {

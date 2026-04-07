@@ -66,7 +66,6 @@ impl RlineWindow {
     pub fn new(app: &gtk4::Application) -> Self {
         glib::Object::builder()
             .property("application", app)
-            .property("title", "rline")
             .property("default-width", 1400)
             .property("default-height", 900)
             .build()
@@ -75,6 +74,7 @@ impl RlineWindow {
     /// Build the three-column layout with nested Paned widgets.
     fn setup_layout(&self) {
         let imp = self.imp();
+        self.set_title(Some("rline"));
 
         // ── Header bar with custom window controls ──
         let header = gtk4::HeaderBar::new();
@@ -228,8 +228,15 @@ impl RlineWindow {
                 if path.is_dir() {
                     tracing::info!("restoring last project: {}", path.display());
                     file_browser.set_root(&path);
+                    self.set_title(Some(&format!("rline - {}", path.display())));
                 }
             }
+        }
+
+        // Spawn the initial terminal *after* restoring the project root so it
+        // opens in the project directory rather than $HOME.
+        if let Some(ref tp) = *imp.terminal_pane.borrow() {
+            tp.add_terminal(None);
         }
     }
 
@@ -269,6 +276,7 @@ impl RlineWindow {
             move |root| {
                 tracing::info!("project root changed to: {}", root.display());
                 window.imp().project_root.replace(Some(root.to_path_buf()));
+                window.set_title(Some(&format!("rline - {}", root.display())));
                 tp.set_default_directory(root);
                 sp.set_project_root(root);
                 gp.set_project_root(root);
@@ -334,6 +342,20 @@ impl RlineWindow {
                 self,
                 move |_, _, _| {
                     window.action_open_file();
+                }
+            ))
+            .build();
+
+        // win.save-file (Ctrl+S)
+        let action_save = gio::ActionEntry::builder("save-file")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let editor = window.imp().editor_pane.borrow().clone();
+                    if let Some(ref editor) = editor {
+                        editor.save_current_tab();
+                    }
                 }
             ))
             .build();
@@ -464,6 +486,7 @@ impl RlineWindow {
 
         self.add_action_entries([
             action_open,
+            action_save,
             action_close,
             action_quick_open,
             action_search,
