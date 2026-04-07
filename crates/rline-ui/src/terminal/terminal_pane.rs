@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk4::prelude::*;
+use vte4::prelude::*;
 
 use super::terminal_tab::TerminalTab;
 
@@ -90,6 +91,30 @@ impl TerminalPane {
     /// Set the default working directory for new terminals.
     pub fn set_default_directory(&self, dir: &Path) {
         self.default_dir.replace(Some(dir.to_path_buf()));
+    }
+
+    /// Apply font settings to all existing terminal tabs and update defaults for new ones.
+    pub fn apply_settings(&self, settings: &rline_config::EditorSettings) {
+        self.font_family
+            .replace(settings.terminal_font_family.clone());
+        self.font_size.replace(settings.terminal_font_size);
+
+        // Apply to all existing terminal tabs
+        let font_desc = gtk4::pango::FontDescription::from_string(&format!(
+            "{} {}",
+            settings.terminal_font_family, settings.terminal_font_size
+        ));
+        let n_pages = self.notebook.n_pages();
+        for i in 0..n_pages {
+            if let Some(page) = self.notebook.nth_page(Some(i)) {
+                // Each page is a ScrolledWindow containing a vte4::Terminal
+                if let Some(scrolled) = page.downcast_ref::<gtk4::ScrolledWindow>() {
+                    if let Some(terminal) = scrolled.child().and_downcast::<vte4::Terminal>() {
+                        terminal.set_font(Some(&font_desc));
+                    }
+                }
+            }
+        }
     }
 
     /// The container widget.

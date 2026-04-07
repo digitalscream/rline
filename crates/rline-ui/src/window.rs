@@ -357,9 +357,13 @@ impl RlineWindow {
     fn action_show_settings(&self) {
         let imp = self.imp();
         let editor_pane = imp.editor_pane.borrow().clone();
+        let terminal_pane = imp.terminal_pane.borrow().clone();
         let dialog = crate::editor::SettingsDialog::new(self.upcast_ref(), move |settings| {
             if let Some(ref editor) = editor_pane {
                 editor.apply_settings(&settings);
+            }
+            if let Some(ref terminal) = terminal_pane {
+                terminal.apply_settings(&settings);
             }
         });
         dialog.present();

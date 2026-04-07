@@ -1,5 +1,7 @@
 //! Settings dialog — theme, fonts, and behavior configuration.
 
+use std::rc::Rc;
+
 use gtk4::prelude::*;
 
 use rline_config::EditorSettings;
@@ -102,9 +104,11 @@ impl SettingsDialog {
         button_box.set_margin_top(16);
         let cancel_btn = gtk4::Button::with_label("Cancel");
         let apply_btn = gtk4::Button::with_label("Apply");
-        apply_btn.add_css_class("suggested-action");
+        let ok_btn = gtk4::Button::with_label("OK");
+        ok_btn.add_css_class("suggested-action");
         button_box.append(&cancel_btn);
         button_box.append(&apply_btn);
+        button_box.append(&ok_btn);
 
         content.append(&theme_row);
         content.append(&editor_font_row);
@@ -126,10 +130,95 @@ impl SettingsDialog {
             }
         ));
 
-        // Wire apply
+        // Shared apply logic wrapped in Rc so both Apply and OK can call it
         let scheme_ids_owned: Vec<String> = scheme_ids.iter().map(|s| s.to_string()).collect();
         let mono_fonts_owned = mono_fonts.clone();
+        let on_apply = Rc::new(on_apply);
+
+        // Wire Apply (apply changes, keep dialog open)
+        let do_apply = {
+            let scheme_ids = scheme_ids_owned.clone();
+            let mono_fonts = mono_fonts_owned.clone();
+            let on_apply = on_apply.clone();
+            Rc::new(
+                move |theme_dropdown: &gtk4::DropDown,
+                      editor_font_dropdown: &gtk4::DropDown,
+                      font_spin: &gtk4::SpinButton,
+                      term_font_dropdown: &gtk4::DropDown,
+                      term_font_spin: &gtk4::SpinButton,
+                      last_project_switch: &gtk4::Switch,
+                      expand_spin: &gtk4::SpinButton| {
+                    let selected = theme_dropdown.selected() as usize;
+                    let theme = scheme_ids
+                        .get(selected)
+                        .cloned()
+                        .unwrap_or_else(|| "Adwaita-dark".to_owned());
+
+                    let editor_font_idx = editor_font_dropdown.selected() as usize;
+                    let editor_font = mono_fonts
+                        .get(editor_font_idx)
+                        .cloned()
+                        .unwrap_or_else(|| "Monospace".to_owned());
+
+                    let term_font_idx = term_font_dropdown.selected() as usize;
+                    let terminal_font = mono_fonts
+                        .get(term_font_idx)
+                        .cloned()
+                        .unwrap_or_else(|| "Monospace".to_owned());
+
+                    let existing = EditorSettings::load().unwrap_or_default();
+                    let new_settings = EditorSettings {
+                        theme,
+                        editor_font_family: editor_font,
+                        font_size: font_spin.value() as u32,
+                        terminal_font_family: terminal_font,
+                        terminal_font_size: term_font_spin.value() as u32,
+                        open_last_project: last_project_switch.is_active(),
+                        last_project_path: existing.last_project_path,
+                        search_auto_expand_threshold: expand_spin.value() as u32,
+                        ..existing
+                    };
+
+                    if let Err(e) = new_settings.save() {
+                        tracing::error!("failed to save settings: {e}");
+                    }
+
+                    on_apply(new_settings);
+                },
+            )
+        };
+
+        let do_apply_for_apply = do_apply.clone();
         apply_btn.connect_clicked(glib::clone!(
+            #[weak]
+            theme_dropdown,
+            #[weak]
+            editor_font_dropdown,
+            #[weak]
+            font_spin,
+            #[weak]
+            term_font_dropdown,
+            #[weak]
+            term_font_spin,
+            #[weak]
+            last_project_switch,
+            #[weak]
+            expand_spin,
+            move |_| {
+                do_apply_for_apply(
+                    &theme_dropdown,
+                    &editor_font_dropdown,
+                    &font_spin,
+                    &term_font_dropdown,
+                    &term_font_spin,
+                    &last_project_switch,
+                    &expand_spin,
+                );
+            }
+        ));
+
+        // Wire OK (apply changes + close dialog)
+        ok_btn.connect_clicked(glib::clone!(
             #[weak]
             window,
             #[weak]
@@ -147,42 +236,15 @@ impl SettingsDialog {
             #[weak]
             expand_spin,
             move |_| {
-                let selected = theme_dropdown.selected() as usize;
-                let theme = scheme_ids_owned
-                    .get(selected)
-                    .cloned()
-                    .unwrap_or_else(|| "Adwaita-dark".to_owned());
-
-                let editor_font_idx = editor_font_dropdown.selected() as usize;
-                let editor_font = mono_fonts_owned
-                    .get(editor_font_idx)
-                    .cloned()
-                    .unwrap_or_else(|| "Monospace".to_owned());
-
-                let term_font_idx = term_font_dropdown.selected() as usize;
-                let terminal_font = mono_fonts_owned
-                    .get(term_font_idx)
-                    .cloned()
-                    .unwrap_or_else(|| "Monospace".to_owned());
-
-                let existing = EditorSettings::load().unwrap_or_default();
-                let new_settings = EditorSettings {
-                    theme,
-                    editor_font_family: editor_font,
-                    font_size: font_spin.value() as u32,
-                    terminal_font_family: terminal_font,
-                    terminal_font_size: term_font_spin.value() as u32,
-                    open_last_project: last_project_switch.is_active(),
-                    last_project_path: existing.last_project_path,
-                    search_auto_expand_threshold: expand_spin.value() as u32,
-                    ..existing
-                };
-
-                if let Err(e) = new_settings.save() {
-                    tracing::error!("failed to save settings: {e}");
-                }
-
-                on_apply(new_settings);
+                do_apply(
+                    &theme_dropdown,
+                    &editor_font_dropdown,
+                    &font_spin,
+                    &term_font_dropdown,
+                    &term_font_spin,
+                    &last_project_switch,
+                    &expand_spin,
+                );
                 window.close();
             }
         ));
