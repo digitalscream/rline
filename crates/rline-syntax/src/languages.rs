@@ -45,6 +45,15 @@ pub enum SupportedLanguage {
     /// Ruby (.rb, .rake, .gemspec)
     #[cfg(feature = "lang-ruby")]
     Ruby,
+    /// YAML (.yaml, .yml)
+    #[cfg(feature = "lang-yaml")]
+    Yaml,
+    /// XML (.xml, .xsl, .xslt, .xsd, .svg)
+    #[cfg(feature = "lang-xml")]
+    Xml,
+    /// HAML (.haml)
+    #[cfg(feature = "lang-haml")]
+    Haml,
 }
 
 /// Look up the tree-sitter language for a file extension.
@@ -94,6 +103,15 @@ pub fn language_for_extension(ext: &str) -> Option<SupportedLanguage> {
 
         #[cfg(feature = "lang-ruby")]
         "rb" | "rake" | "gemspec" => Some(SupportedLanguage::Ruby),
+
+        #[cfg(feature = "lang-yaml")]
+        "yaml" | "yml" => Some(SupportedLanguage::Yaml),
+
+        #[cfg(feature = "lang-xml")]
+        "xml" | "xsl" | "xslt" | "xsd" | "svg" => Some(SupportedLanguage::Xml),
+
+        #[cfg(feature = "lang-haml")]
+        "haml" => Some(SupportedLanguage::Haml),
 
         _ => None,
     }
@@ -147,6 +165,12 @@ pub fn language_name(language: SupportedLanguage) -> &'static str {
         SupportedLanguage::Markdown => "markdown",
         #[cfg(feature = "lang-ruby")]
         SupportedLanguage::Ruby => "ruby",
+        #[cfg(feature = "lang-yaml")]
+        SupportedLanguage::Yaml => "yaml",
+        #[cfg(feature = "lang-xml")]
+        SupportedLanguage::Xml => "xml",
+        #[cfg(feature = "lang-haml")]
+        SupportedLanguage::Haml => "haml",
     }
 }
 
@@ -177,6 +201,12 @@ pub fn ts_language(language: SupportedLanguage) -> tree_sitter::Language {
         SupportedLanguage::Markdown => tree_sitter_md::LANGUAGE.into(),
         #[cfg(feature = "lang-ruby")]
         SupportedLanguage::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        #[cfg(feature = "lang-yaml")]
+        SupportedLanguage::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+        #[cfg(feature = "lang-xml")]
+        SupportedLanguage::Xml => tree_sitter_xml::LANGUAGE_XML.into(),
+        #[cfg(feature = "lang-haml")]
+        SupportedLanguage::Haml => tree_sitter_haml::LANGUAGE.into(),
     }
 }
 
@@ -277,6 +307,30 @@ fn language_components(
             "",
             tree_sitter_ruby::LOCALS_QUERY,
         ),
+
+        #[cfg(feature = "lang-yaml")]
+        SupportedLanguage::Yaml => (
+            tree_sitter_yaml::LANGUAGE.into(),
+            tree_sitter_yaml::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+
+        #[cfg(feature = "lang-xml")]
+        SupportedLanguage::Xml => (
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+            "",
+            "",
+        ),
+
+        #[cfg(feature = "lang-haml")]
+        SupportedLanguage::Haml => (
+            tree_sitter_haml::LANGUAGE.into(),
+            tree_sitter_haml::HIGHLIGHTS_QUERY,
+            tree_sitter_haml::INJECTIONS_QUERY,
+            "",
+        ),
     }
 }
 
@@ -374,6 +428,12 @@ mod tests {
             SupportedLanguage::Markdown,
             #[cfg(feature = "lang-ruby")]
             SupportedLanguage::Ruby,
+            #[cfg(feature = "lang-yaml")]
+            SupportedLanguage::Yaml,
+            #[cfg(feature = "lang-xml")]
+            SupportedLanguage::Xml,
+            #[cfg(feature = "lang-haml")]
+            SupportedLanguage::Haml,
         ];
         for lang in languages {
             let config = build_highlight_config(lang);
