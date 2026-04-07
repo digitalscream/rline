@@ -74,13 +74,53 @@ impl RlineWindow {
     fn setup_layout(&self) {
         let imp = self.imp();
 
-        // ── Header bar with hamburger menu ──
+        // ── Header bar with custom window controls ──
         let header = gtk4::HeaderBar::new();
+        header.set_show_title_buttons(false);
+
         let menu_button = gtk4::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&menu::build_app_menu())
             .build();
+        // Custom window control buttons for precise size control
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.add_css_class("windowcontrol");
+        close_btn.set_valign(gtk4::Align::Center);
+        close_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.close()
+        ));
+
+        let max_btn = gtk4::Button::from_icon_name("window-maximize-symbolic");
+        max_btn.add_css_class("flat");
+        max_btn.add_css_class("windowcontrol");
+        max_btn.set_valign(gtk4::Align::Center);
+        max_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.set_maximized(!win.is_maximized())
+        ));
+
+        let min_btn = gtk4::Button::from_icon_name("window-minimize-symbolic");
+        min_btn.add_css_class("flat");
+        min_btn.add_css_class("windowcontrol");
+        min_btn.set_valign(gtk4::Align::Center);
+        min_btn.connect_clicked(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.minimize()
+        ));
+
+        let controls_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        controls_box.set_valign(gtk4::Align::Center);
+        controls_box.append(&min_btn);
+        controls_box.append(&max_btn);
+        controls_box.append(&close_btn);
+        header.pack_end(&controls_box);
         header.pack_end(&menu_button);
+
         self.set_titlebar(Some(&header));
 
         // ── Left pane: Stack with three tabs ──
@@ -276,12 +316,98 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.quit-app (Ctrl+Q)
+        let action_quit = gio::ActionEntry::builder("quit-app")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    if let Some(app) = window.application() {
+                        app.quit();
+                    }
+                }
+            ))
+            .build();
+
+        // win.show-git (Ctrl+Shift+G)
+        let action_show_git = gio::ActionEntry::builder("show-git")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let stack = window.imp().left_stack.borrow().clone();
+                    if let Some(ref stack) = stack {
+                        stack.set_visible_child_name("git");
+                    }
+                }
+            ))
+            .build();
+
+        // win.show-files (Ctrl+Shift+E)
+        let action_show_files = gio::ActionEntry::builder("show-files")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let stack = window.imp().left_stack.borrow().clone();
+                    if let Some(ref stack) = stack {
+                        stack.set_visible_child_name("files");
+                    }
+                }
+            ))
+            .build();
+
+        // win.focus-terminal (Ctrl+Shift+W)
+        let action_focus_terminal = gio::ActionEntry::builder("focus-terminal")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    window.action_focus_terminal();
+                }
+            ))
+            .build();
+
+        // win.find (Ctrl+F)
+        let action_find = gio::ActionEntry::builder("find")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let editor = window.imp().editor_pane.borrow().clone();
+                    if let Some(ref editor) = editor {
+                        editor.show_find_bar(false);
+                    }
+                }
+            ))
+            .build();
+
+        // win.find-replace (Ctrl+H)
+        let action_find_replace = gio::ActionEntry::builder("find-replace")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let editor = window.imp().editor_pane.borrow().clone();
+                    if let Some(ref editor) = editor {
+                        editor.show_find_bar(true);
+                    }
+                }
+            ))
+            .build();
+
         self.add_action_entries([
             action_open,
             action_close,
             action_quick_open,
             action_search,
             action_settings,
+            action_quit,
+            action_show_git,
+            action_show_files,
+            action_focus_terminal,
+            action_find,
+            action_find_replace,
         ]);
     }
 
@@ -344,6 +470,13 @@ impl RlineWindow {
         dialog.present();
     }
 
+    fn action_focus_terminal(&self) {
+        let imp = self.imp();
+        if let Some(ref terminal) = *imp.terminal_pane.borrow() {
+            terminal.focus_current();
+        }
+    }
+
     fn action_project_search(&self) {
         let imp = self.imp();
         if let Some(ref stack) = *imp.left_stack.borrow() {
@@ -359,6 +492,8 @@ impl RlineWindow {
         let editor_pane = imp.editor_pane.borrow().clone();
         let terminal_pane = imp.terminal_pane.borrow().clone();
         let dialog = crate::editor::SettingsDialog::new(self.upcast_ref(), move |settings| {
+            // Always update app-wide chrome, even if no editor tabs are open
+            crate::theming::apply_app_theme(&settings.theme);
             if let Some(ref editor) = editor_pane {
                 editor.apply_settings(&settings);
             }

@@ -1,6 +1,7 @@
 //! Editor pane — tabbed GtkSourceView buffers.
 
 mod editor_pane;
+mod find_bar;
 mod settings_dialog;
 mod syntax_highlighter;
 mod tab;

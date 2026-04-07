@@ -114,6 +114,12 @@ impl SettingsDialog {
         expand_spin.set_value(settings.search_auto_expand_threshold as f64);
         expand_row.append(&expand_spin);
 
+        // ── Tab cycle depth ──
+        let cycle_row = Self::make_row("Ctrl+Tab Cycle Depth");
+        let cycle_spin = gtk4::SpinButton::with_range(2.0, 50.0, 1.0);
+        cycle_spin.set_value(settings.tab_cycle_depth as f64);
+        cycle_row.append(&cycle_spin);
+
         // ── Tree-sitter highlighting ──
         let treesitter_row = Self::make_row("Tree-sitter Highlighting");
         let treesitter_switch = gtk4::Switch::new();
@@ -141,6 +147,7 @@ impl SettingsDialog {
         content.append(&term_font_row);
         content.append(&last_project_row);
         content.append(&expand_row);
+        content.append(&cycle_row);
         content.append(&treesitter_row);
         content.append(&button_box);
 
@@ -171,6 +178,7 @@ impl SettingsDialog {
                       term_font_spin: &gtk4::SpinButton,
                       last_project_switch: &gtk4::Switch,
                       expand_spin: &gtk4::SpinButton,
+                      cycle_spin: &gtk4::SpinButton,
                       treesitter_switch: &gtk4::Switch| {
                     // Read selected theme from the dropdown's model (handles dynamically added items)
                     let theme = theme_dropdown
@@ -201,6 +209,7 @@ impl SettingsDialog {
                         open_last_project: last_project_switch.is_active(),
                         last_project_path: existing.last_project_path,
                         search_auto_expand_threshold: expand_spin.value() as u32,
+                        tab_cycle_depth: cycle_spin.value() as u32,
                         use_treesitter: treesitter_switch.is_active(),
                         ..existing
                     };
@@ -231,6 +240,8 @@ impl SettingsDialog {
             #[weak]
             expand_spin,
             #[weak]
+            cycle_spin,
+            #[weak]
             treesitter_switch,
             move |_| {
                 do_apply_for_apply(
@@ -241,6 +252,7 @@ impl SettingsDialog {
                     &term_font_spin,
                     &last_project_switch,
                     &expand_spin,
+                    &cycle_spin,
                     &treesitter_switch,
                 );
             }
@@ -265,6 +277,8 @@ impl SettingsDialog {
             #[weak]
             expand_spin,
             #[weak]
+            cycle_spin,
+            #[weak]
             treesitter_switch,
             move |_| {
                 do_apply(
@@ -275,6 +289,7 @@ impl SettingsDialog {
                     &term_font_spin,
                     &last_project_switch,
                     &expand_spin,
+                    &cycle_spin,
                     &treesitter_switch,
                 );
                 window.close();

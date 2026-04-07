@@ -111,9 +111,18 @@ pub fn apply_app_theme(scheme_id: &str) {
                 headerbar {{
                     background: {titlebar_bg};
                     color: {fg};
-                    min-height: 36px;
+                    min-height: 28px;
                     border-bottom: 1px solid {separator};
                     box-shadow: none;
+                }}
+                button.windowcontrol {{
+                    min-width: 20px;
+                    min-height: 20px;
+                    padding: 2px;
+                    margin: 0;
+                }}
+                button.windowcontrol image {{
+                    -gtk-icon-size: 14px;
                 }}
 
                 /* ── Left pane: stack switcher + panels ── */

@@ -36,6 +36,9 @@ pub struct EditorSettings {
     /// Whether to use tree-sitter for syntax highlighting (falls back to GtkSourceView).
     #[serde(default = "default_true")]
     pub use_treesitter: bool,
+    /// Number of most-recently-used tabs to cycle through with Ctrl+Tab.
+    #[serde(default = "default_tab_cycle_depth")]
+    pub tab_cycle_depth: u32,
 }
 
 impl Default for EditorSettings {
@@ -53,6 +56,7 @@ impl Default for EditorSettings {
             last_project_path: None,
             search_auto_expand_threshold: 5,
             use_treesitter: true,
+            tab_cycle_depth: default_tab_cycle_depth(),
         }
     }
 }
@@ -60,6 +64,11 @@ impl Default for EditorSettings {
 /// Helper for `#[serde(default)]` on bool fields that default to true.
 fn default_true() -> bool {
     true
+}
+
+/// Default number of MRU tabs to cycle through with Ctrl+Tab.
+fn default_tab_cycle_depth() -> u32 {
+    10
 }
 
 impl EditorSettings {
@@ -150,6 +159,7 @@ mod tests {
             last_project_path: Some("/tmp/test".to_owned()),
             search_auto_expand_threshold: 10,
             use_treesitter: false,
+            tab_cycle_depth: 5,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

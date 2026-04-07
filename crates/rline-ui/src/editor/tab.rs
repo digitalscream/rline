@@ -10,14 +10,15 @@ use sourceview5::prelude::*;
 use rline_config::EditorSettings;
 use rline_core::LineIndex;
 
+use crate::editor::find_bar::FindBar;
 use crate::editor::syntax_highlighter::SyntaxHighlighter;
 use crate::error::UiError;
 
 /// A single editor tab containing a sourceview5 View and its associated state.
 #[derive(Debug, Clone)]
 pub struct EditorTab {
-    /// The scrolled window container.
-    scrolled: gtk4::ScrolledWindow,
+    /// Overlay container — scrolled editor with find bar floating on top.
+    overlay: gtk4::Overlay,
     /// The sourceview5 view widget.
     view: sourceview5::View,
     /// The sourceview5 buffer.
@@ -32,6 +33,8 @@ pub struct EditorTab {
     highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
     /// Whether tree-sitter highlighting is enabled.
     use_treesitter: bool,
+    /// Per-tab find/replace bar (overlaid top-right).
+    find_bar: FindBar,
 }
 
 impl EditorTab {
@@ -68,6 +71,14 @@ impl EditorTab {
             .hexpand(true)
             .build();
 
+        // Overlay: scrolled editor as main child, find bar floats on top
+        let find_bar = FindBar::new(&buffer, &view);
+        let overlay = gtk4::Overlay::new();
+        overlay.set_child(Some(&scrolled));
+        overlay.add_overlay(find_bar.widget());
+        overlay.set_vexpand(true);
+        overlay.set_hexpand(true);
+
         // Build tab label
         let filename_label = gtk4::Label::new(Some("Untitled"));
         let tab_label = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
@@ -95,7 +106,7 @@ impl EditorTab {
         ));
 
         Self {
-            scrolled,
+            overlay,
             view,
             buffer,
             tab_label,
@@ -103,6 +114,7 @@ impl EditorTab {
             path: path_store,
             highlighter: Rc::new(RefCell::new(None)),
             use_treesitter: settings.use_treesitter,
+            find_bar,
         }
     }
 
@@ -178,9 +190,14 @@ impl EditorTab {
         self.path.borrow().clone()
     }
 
+    /// Show this tab's find bar overlay.
+    pub fn show_find_bar(&self, with_replace: bool) {
+        self.find_bar.show(with_replace);
+    }
+
     /// The widget to embed in the notebook.
-    pub fn widget(&self) -> &gtk4::ScrolledWindow {
-        &self.scrolled
+    pub fn widget(&self) -> &gtk4::Overlay {
+        &self.overlay
     }
 
     /// The tab label widget.

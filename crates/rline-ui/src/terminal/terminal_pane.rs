@@ -117,6 +117,19 @@ impl TerminalPane {
         }
     }
 
+    /// Focus the currently active terminal tab.
+    pub fn focus_current(&self) {
+        if let Some(page_num) = self.notebook.current_page() {
+            if let Some(page) = self.notebook.nth_page(Some(page_num)) {
+                if let Some(scrolled) = page.downcast_ref::<gtk4::ScrolledWindow>() {
+                    if let Some(terminal) = scrolled.child() {
+                        terminal.grab_focus();
+                    }
+                }
+            }
+        }
+    }
+
     /// The container widget.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
