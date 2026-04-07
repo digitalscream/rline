@@ -10,6 +10,7 @@ use sourceview5::prelude::*;
 use rline_config::EditorSettings;
 use rline_core::LineIndex;
 
+use crate::editor::syntax_highlighter::SyntaxHighlighter;
 use crate::error::UiError;
 
 /// A single editor tab containing a sourceview5 View and its associated state.
@@ -27,6 +28,10 @@ pub struct EditorTab {
     filename_label: gtk4::Label,
     /// The file path for this tab.
     path: Rc<RefCell<Option<PathBuf>>>,
+    /// Tree-sitter syntax highlighter (None when no grammar exists for this file).
+    highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
+    /// Whether tree-sitter highlighting is enabled.
+    use_treesitter: bool,
 }
 
 impl EditorTab {
@@ -96,6 +101,8 @@ impl EditorTab {
             tab_label,
             filename_label,
             path: path_store,
+            highlighter: Rc::new(RefCell::new(None)),
+            use_treesitter: settings.use_treesitter,
         }
     }
 
@@ -116,10 +123,15 @@ impl EditorTab {
         self.filename_label.set_text(&filename);
         self.path.replace(Some(path.to_path_buf()));
 
-        // Set language based on file extension
+        // Set language based on file extension (kept for auto-indent and context classes)
         let lang_manager = sourceview5::LanguageManager::default();
         if let Some(lang) = lang_manager.guess_language(Some(&path.display().to_string()), None) {
             self.buffer.set_language(Some(&lang));
+        }
+
+        // Set up tree-sitter highlighting if available
+        if self.use_treesitter {
+            self.setup_treesitter_highlighting(path);
         }
 
         Ok(())
@@ -192,6 +204,33 @@ impl EditorTab {
         }
         Self::apply_theme_to_buffer(&self.buffer, &settings.theme);
         Self::apply_font(&self.view, &settings.editor_font_family, settings.font_size);
+
+        // Rebuild tree-sitter tags from the new theme and re-highlight
+        if let Some(ref mut hl) = *self.highlighter.borrow_mut() {
+            hl.rebuild_tags_and_rehighlight();
+        }
+    }
+
+    /// Set up tree-sitter highlighting for the file at the given path.
+    fn setup_treesitter_highlighting(&self, path: &Path) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        let Some(language) = rline_syntax::language_for_extension(ext) else {
+            tracing::debug!("no tree-sitter grammar for extension: {ext:?}");
+            return;
+        };
+
+        match SyntaxHighlighter::new(language, &self.buffer) {
+            Ok(hl) => {
+                hl.highlight_full();
+                self.highlighter.replace(Some(hl));
+            }
+            Err(e) => {
+                tracing::warn!("failed to create tree-sitter highlighter: {e}");
+                // Fall back to GtkSourceView highlighting
+                self.buffer.set_highlight_syntax(true);
+            }
+        }
     }
 
     fn apply_theme_to_buffer(buffer: &sourceview5::Buffer, theme_id: &str) {

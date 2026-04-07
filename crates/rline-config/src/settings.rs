@@ -33,6 +33,9 @@ pub struct EditorSettings {
     pub last_project_path: Option<String>,
     /// Auto-expand search result files with this many matches or fewer.
     pub search_auto_expand_threshold: u32,
+    /// Whether to use tree-sitter for syntax highlighting (falls back to GtkSourceView).
+    #[serde(default = "default_true")]
+    pub use_treesitter: bool,
 }
 
 impl Default for EditorSettings {
@@ -49,8 +52,14 @@ impl Default for EditorSettings {
             open_last_project: true,
             last_project_path: None,
             search_auto_expand_threshold: 5,
+            use_treesitter: true,
         }
     }
+}
+
+/// Helper for `#[serde(default)]` on bool fields that default to true.
+fn default_true() -> bool {
+    true
 }
 
 impl EditorSettings {
@@ -140,6 +149,7 @@ mod tests {
             open_last_project: false,
             last_project_path: Some("/tmp/test".to_owned()),
             search_auto_expand_threshold: 10,
+            use_treesitter: false,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");
