@@ -1,4 +1,8 @@
-//! QuickOpenDialog — Ctrl+P fuzzy file finder.
+//! QuickOpenDialog — Ctrl+P fuzzy file finder as a top-of-screen popup.
+//!
+//! Presents a search entry at the top of the window with a dropdown list of
+//! matching files. Supports keyboard navigation (arrow keys + Enter) and
+//! single-click selection.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -62,7 +66,7 @@ mod file_entry_object {
 
 use file_entry_object::FileEntryObject;
 
-/// A modal quick-open dialog for finding files by name.
+/// A top-of-screen popup for finding files by name with keyboard navigation.
 pub struct QuickOpenDialog {
     window: gtk4::Window,
     // Callback type alias would obscure the signature for these one-off event handlers
@@ -77,28 +81,30 @@ impl std::fmt::Debug for QuickOpenDialog {
 }
 
 impl QuickOpenDialog {
-    /// Create a new quick-open dialog.
+    /// Create a new quick-open popup anchored at the top of the parent window.
     pub fn new(parent: &gtk4::Window, project_root: &Path) -> Self {
         let window = gtk4::Window::builder()
-            .title("Open File")
             .modal(true)
             .transient_for(parent)
-            .default_width(500)
-            .default_height(400)
+            .decorated(false)
+            .default_width(600)
+            .default_height(350)
             .build();
 
-        let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-        vbox.set_margin_top(8);
-        vbox.set_margin_bottom(8);
-        vbox.set_margin_start(8);
-        vbox.set_margin_end(8);
+        // Position at top center of parent
+        window.set_valign(gtk4::Align::Start);
+
+        let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
         let search_entry = gtk4::SearchEntry::new();
-        search_entry.set_placeholder_text(Some("Type to search files..."));
+        search_entry.set_placeholder_text(Some("Search files by name..."));
+        search_entry.set_hexpand(true);
+        search_entry.add_css_class("quick-open-entry");
         vbox.append(&search_entry);
 
         let store = gio::ListStore::new::<FileEntryObject>();
         let selection = gtk4::SingleSelection::new(Some(store.clone()));
+        selection.set_autoselect(true);
 
         let factory = gtk4::SignalListItemFactory::new();
         factory.connect_setup(|_, item| {
@@ -106,6 +112,10 @@ impl QuickOpenDialog {
                 let label = gtk4::Label::new(None);
                 label.set_halign(gtk4::Align::Start);
                 label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+                label.set_margin_top(4);
+                label.set_margin_bottom(4);
+                label.set_margin_start(8);
+                label.set_margin_end(8);
                 list_item.set_child(Some(&label));
             }
         });
@@ -119,7 +129,7 @@ impl QuickOpenDialog {
             }
         });
 
-        let list_view = gtk4::ListView::new(Some(selection), Some(factory));
+        let list_view = gtk4::ListView::new(Some(selection.clone()), Some(factory));
         list_view.set_vexpand(true);
 
         let scrolled = gtk4::ScrolledWindow::builder()
@@ -130,18 +140,17 @@ impl QuickOpenDialog {
 
         window.set_child(Some(&vbox));
 
-        // Collect file paths in background
+        // Collect file paths
         let root = project_root.to_path_buf();
         let all_files: Arc<Vec<PathBuf>> = Arc::new(search_worker::collect_file_paths(&root));
-        let root_for_filter = root.clone();
 
         // Callback type alias would obscure the signature for these one-off event handlers
         #[allow(clippy::type_complexity)]
         let on_file_selected: Rc<RefCell<Option<Box<dyn Fn(&Path)>>>> = Rc::new(RefCell::new(None));
 
-        // Filter as user types
+        // ── Filter as user types ──
         let files_ref = all_files.clone();
-        let root_ref = root_for_filter.clone();
+        let root_ref = root.clone();
         search_entry.connect_search_changed(glib::clone!(
             #[weak(rename_to = store_ref)]
             store,
@@ -153,61 +162,99 @@ impl QuickOpenDialog {
                     return;
                 }
 
-                let mut count = 0;
-                for path in files_ref.iter() {
-                    if count >= 50 {
-                        break; // Limit results for performance
-                    }
-                    let name = path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-
-                    if subsequence_match(&name, &query) {
-                        store_ref.append(&FileEntryObject::new(path, &root_ref));
-                        count += 1;
-                    }
-                }
-            }
-        ));
-
-        // Open on activate (Enter or click)
-        let cb_ref = on_file_selected.clone();
-        list_view.connect_activate(glib::clone!(
-            #[weak]
-            window,
-            #[weak]
-            store,
-            move |_, position| {
-                if let Some(item) = store.item(position) {
-                    if let Some(obj) = item.downcast_ref::<FileEntryObject>() {
-                        let path = PathBuf::from(obj.file_path());
-                        if let Some(ref cb) = *cb_ref.borrow() {
-                            cb(&path);
+                // Score and collect matches
+                let mut scored: Vec<(usize, &PathBuf)> = files_ref
+                    .iter()
+                    .filter_map(|path| {
+                        let name = path
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_lowercase())
+                            .unwrap_or_default();
+                        if subsequence_match(&name, &query) {
+                            Some((match_score(&name, &query), path))
+                        } else {
+                            None
                         }
-                        window.close();
-                    }
+                    })
+                    .collect();
+
+                // Sort by score (lower = better match)
+                scored.sort_by_key(|(score, _)| *score);
+
+                for (_, path) in scored.iter().take(50) {
+                    store_ref.append(&FileEntryObject::new(path, &root_ref));
                 }
             }
         ));
 
-        // Escape to close
-        let esc_controller = gtk4::EventControllerKey::new();
-        esc_controller.connect_key_pressed(glib::clone!(
+        // ── Single-click selects and closes ──
+        let cb_click = on_file_selected.clone();
+        let store_click = store.clone();
+        let lv_click = list_view.clone();
+        let click_gesture = gtk4::GestureClick::new();
+        click_gesture.set_button(1);
+        let win_click = window.clone();
+        click_gesture.connect_released(move |_, _, _, _| {
+            if let Some((path, _)) = get_selected_file(&lv_click, &store_click) {
+                if let Some(ref cb) = *cb_click.borrow() {
+                    cb(&path);
+                }
+                win_click.close();
+            }
+        });
+        list_view.add_controller(click_gesture);
+
+        // ── Keyboard navigation: arrows, Enter, Escape ──
+        // Use capture phase so we intercept keys before the search entry consumes them
+        let key_controller = gtk4::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let cb_key = on_file_selected.clone();
+        let selection_key = selection.clone();
+        let store_key = store.clone();
+        key_controller.connect_key_pressed(glib::clone!(
             #[weak]
             window,
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, key, _, _| {
-                if key == gtk4::gdk::Key::Escape {
-                    window.close();
-                    glib::Propagation::Stop
-                } else {
-                    glib::Propagation::Proceed
+                match key {
+                    gtk4::gdk::Key::Escape => {
+                        window.close();
+                        glib::Propagation::Stop
+                    }
+                    gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => {
+                        let pos = selection_key.selected();
+                        if let Some(item) = store_key.item(pos) {
+                            if let Some(obj) = item.downcast_ref::<FileEntryObject>() {
+                                let path = PathBuf::from(obj.file_path());
+                                if let Some(ref cb) = *cb_key.borrow() {
+                                    cb(&path);
+                                }
+                                window.close();
+                            }
+                        }
+                        glib::Propagation::Stop
+                    }
+                    gtk4::gdk::Key::Down => {
+                        let current = selection_key.selected();
+                        let n_items = store_key.n_items();
+                        if n_items > 0 && current + 1 < n_items {
+                            selection_key.set_selected(current + 1);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    gtk4::gdk::Key::Up => {
+                        let current = selection_key.selected();
+                        if current > 0 {
+                            selection_key.set_selected(current - 1);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
                 }
             }
         ));
-        window.add_controller(esc_controller);
+        window.add_controller(key_controller);
 
         Self {
             window,
@@ -220,10 +267,23 @@ impl QuickOpenDialog {
         self.on_file_selected.replace(Some(Box::new(f)));
     }
 
-    /// Present the dialog.
+    /// Present the popup.
     pub fn present(&self) {
         self.window.present();
     }
+}
+
+/// Get the currently selected file from the list view.
+fn get_selected_file(
+    list_view: &gtk4::ListView,
+    store: &gio::ListStore,
+) -> Option<(PathBuf, String)> {
+    let model = list_view.model()?;
+    let selection = model.downcast_ref::<gtk4::SingleSelection>()?;
+    let pos = selection.selected();
+    let item = store.item(pos)?;
+    let obj = item.downcast_ref::<FileEntryObject>()?;
+    Some((PathBuf::from(obj.file_path()), obj.display_name()))
 }
 
 /// Simple subsequence matching: every character in `query` appears in `name`
@@ -240,4 +300,40 @@ fn subsequence_match(name: &str, query: &str) -> bool {
         }
     }
     true
+}
+
+/// Score a match for relevance ranking. Lower score = better match.
+///
+/// Scoring heuristics:
+/// - Exact filename match gets best score (0)
+/// - Prefix match scores better than mid-string match
+/// - Fewer gaps between matched characters scores better
+/// - Shorter filenames score better (less noise)
+fn match_score(name: &str, query: &str) -> usize {
+    // Exact match
+    if name == query {
+        return 0;
+    }
+
+    // Prefix match bonus
+    let prefix_bonus = if name.starts_with(query) { 0 } else { 100 };
+
+    // Count gaps between matched characters
+    let mut gaps = 0;
+    let mut last_match_pos: Option<usize> = None;
+    let mut name_iter = name.char_indices();
+
+    for qc in query.chars() {
+        for (pos, nc) in name_iter.by_ref() {
+            if nc == qc {
+                if let Some(last) = last_match_pos {
+                    gaps += pos - last - 1;
+                }
+                last_match_pos = Some(pos);
+                break;
+            }
+        }
+    }
+
+    prefix_bonus + gaps * 10 + name.len()
 }

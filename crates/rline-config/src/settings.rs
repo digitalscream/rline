@@ -13,6 +13,8 @@ use crate::paths;
 pub struct EditorSettings {
     /// The GtkSourceView style scheme ID.
     pub theme: String,
+    /// Editor font family.
+    pub editor_font_family: String,
     /// Editor font size in points.
     pub font_size: u32,
     /// Tab width in spaces.
@@ -21,6 +23,8 @@ pub struct EditorSettings {
     pub show_line_numbers: bool,
     /// Whether to wrap text.
     pub wrap_text: bool,
+    /// Terminal font family.
+    pub terminal_font_family: String,
     /// Terminal font size in points.
     pub terminal_font_size: u32,
     /// Whether to reopen the last project on startup.
@@ -35,10 +39,12 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             theme: "Adwaita-dark".to_owned(),
+            editor_font_family: "Monospace".to_owned(),
             font_size: 13,
             tab_width: 4,
             show_line_numbers: true,
             wrap_text: false,
+            terminal_font_family: "Monospace".to_owned(),
             terminal_font_size: 13,
             open_last_project: true,
             last_project_path: None,
@@ -124,10 +130,12 @@ mod tests {
     fn test_editor_settings_serde_round_trip() {
         let original = EditorSettings {
             theme: "monokai".to_owned(),
+            editor_font_family: "Fira Code".to_owned(),
             font_size: 16,
             tab_width: 2,
             show_line_numbers: false,
             wrap_text: true,
+            terminal_font_family: "JetBrains Mono".to_owned(),
             terminal_font_size: 14,
             open_last_project: false,
             last_project_path: Some("/tmp/test".to_owned()),

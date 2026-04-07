@@ -54,8 +54,8 @@ impl EditorTab {
         // Apply theme
         Self::apply_theme_to_buffer(&buffer, &settings.theme);
 
-        // Apply font size
-        Self::apply_font_size(&view, settings.font_size);
+        // Apply font
+        Self::apply_font(&view, &settings.editor_font_family, settings.font_size);
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(&view)
@@ -191,7 +191,7 @@ impl EditorTab {
             self.view.set_wrap_mode(gtk4::WrapMode::None);
         }
         Self::apply_theme_to_buffer(&self.buffer, &settings.theme);
-        Self::apply_font_size(&self.view, settings.font_size);
+        Self::apply_font(&self.view, &settings.editor_font_family, settings.font_size);
     }
 
     fn apply_theme_to_buffer(buffer: &sourceview5::Buffer, theme_id: &str) {
@@ -203,8 +203,9 @@ impl EditorTab {
         crate::theming::apply_app_theme(theme_id);
     }
 
-    fn apply_font_size(view: &sourceview5::View, font_size: u32) {
-        let css = format!("textview {{ font-size: {font_size}pt; }}");
+    fn apply_font(view: &sourceview5::View, font_family: &str, font_size: u32) {
+        let css =
+            format!("textview {{ font-family: \"{font_family}\"; font-size: {font_size}pt; }}");
         let provider = gtk4::CssProvider::new();
         provider.load_from_data(&css);
         gtk4::style_context_add_provider_for_display(

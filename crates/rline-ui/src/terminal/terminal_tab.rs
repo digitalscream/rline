@@ -14,13 +14,18 @@ pub struct TerminalTab {
 
 impl TerminalTab {
     /// Create a new terminal tab and spawn a shell.
-    pub fn new(index: usize, working_dir: Option<&Path>, font_size: u32) -> Self {
+    pub fn new(
+        index: usize,
+        working_dir: Option<&Path>,
+        font_family: &str,
+        font_size: u32,
+    ) -> Self {
         let terminal = vte4::Terminal::new();
         terminal.set_vexpand(true);
         terminal.set_hexpand(true);
 
-        // Apply font size
-        Self::apply_font_size(&terminal, font_size);
+        // Apply font
+        Self::apply_font(&terminal, font_family, font_size);
 
         let label = gtk4::Label::new(Some(&format!("Terminal {index}")));
 
@@ -64,10 +69,10 @@ impl TerminalTab {
         &self.label
     }
 
-    /// Apply a font size to the terminal widget.
-    fn apply_font_size(terminal: &vte4::Terminal, font_size: u32) {
+    /// Apply font family and size to the terminal widget.
+    fn apply_font(terminal: &vte4::Terminal, font_family: &str, font_size: u32) {
         let font_desc =
-            gtk4::pango::FontDescription::from_string(&format!("monospace {font_size}"));
+            gtk4::pango::FontDescription::from_string(&format!("{font_family} {font_size}"));
         terminal.set_font(Some(&font_desc));
     }
 }

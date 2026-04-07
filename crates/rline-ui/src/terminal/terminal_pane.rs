@@ -15,6 +15,7 @@ pub struct TerminalPane {
     notebook: gtk4::Notebook,
     default_dir: Rc<RefCell<Option<PathBuf>>>,
     tab_counter: Rc<RefCell<usize>>,
+    font_family: Rc<RefCell<String>>,
     font_size: Rc<RefCell<u32>>,
 }
 
@@ -47,6 +48,7 @@ impl TerminalPane {
             notebook,
             default_dir: Rc::new(RefCell::new(None)),
             tab_counter: Rc::new(RefCell::new(0)),
+            font_family: Rc::new(RefCell::new(settings.terminal_font_family)),
             font_size: Rc::new(RefCell::new(settings.terminal_font_size)),
         };
 
@@ -72,8 +74,9 @@ impl TerminalPane {
             .map(|p| p.to_path_buf())
             .or_else(|| self.default_dir.borrow().clone());
 
+        let font_family = self.font_family.borrow().clone();
         let font_size = *self.font_size.borrow();
-        let tab = TerminalTab::new(index, dir.as_deref(), font_size);
+        let tab = TerminalTab::new(index, dir.as_deref(), &font_family, font_size);
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(tab.widget())

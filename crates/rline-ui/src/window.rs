@@ -199,21 +199,24 @@ impl RlineWindow {
         // Project root changes update terminal + search + persist last project
         let tp = terminal_pane.clone();
         let sp = search_panel.clone();
-        let window_imp = self.imp().project_root.clone();
-        file_browser.set_on_project_root_changed(move |root| {
-            tracing::info!("project root changed to: {}", root.display());
-            window_imp.replace(Some(root.to_path_buf()));
-            tp.set_default_directory(root);
-            sp.set_project_root(root);
+        file_browser.set_on_project_root_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |root| {
+                tracing::info!("project root changed to: {}", root.display());
+                window.imp().project_root.replace(Some(root.to_path_buf()));
+                tp.set_default_directory(root);
+                sp.set_project_root(root);
 
-            // Persist last project path for next startup
-            if let Ok(mut settings) = rline_config::EditorSettings::load() {
-                settings.last_project_path = Some(root.display().to_string());
-                if let Err(e) = settings.save() {
-                    tracing::warn!("failed to save last project path: {e}");
+                // Persist last project path for next startup
+                if let Ok(mut settings) = rline_config::EditorSettings::load() {
+                    settings.last_project_path = Some(root.display().to_string());
+                    if let Err(e) = settings.save() {
+                        tracing::warn!("failed to save last project path: {e}");
+                    }
                 }
             }
-        });
+        ));
     }
 
     /// Set up window-level actions for keyboard shortcuts.
@@ -320,18 +323,25 @@ impl RlineWindow {
     fn action_quick_open(&self) {
         let imp = self.imp();
         let project_root = imp.project_root.borrow().clone();
-        if let Some(root) = project_root {
-            let dialog = crate::search::QuickOpenDialog::new(self.upcast_ref(), &root);
-            let ep = imp.editor_pane.borrow().clone();
-            dialog.set_on_file_selected(move |path| {
-                if let Some(ref editor) = ep {
-                    if let Err(e) = editor.open_file(path) {
-                        tracing::error!("failed to open file: {e}");
-                    }
+        tracing::debug!("quick-open: project_root = {:?}", project_root);
+        let root = match project_root {
+            Some(r) => r,
+            None => {
+                tracing::info!("quick-open: no project root set, ignoring Ctrl+P");
+                return;
+            }
+        };
+
+        let dialog = crate::search::QuickOpenDialog::new(self.upcast_ref(), &root);
+        let ep = imp.editor_pane.borrow().clone();
+        dialog.set_on_file_selected(move |path| {
+            if let Some(ref editor) = ep {
+                if let Err(e) = editor.open_file(path) {
+                    tracing::error!("failed to open file: {e}");
                 }
-            });
-            dialog.present();
-        }
+            }
+        });
+        dialog.present();
     }
 
     fn action_project_search(&self) {
