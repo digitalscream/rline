@@ -324,6 +324,36 @@ pub fn apply_app_theme(scheme_id: &str) {
                 color: {status_bar_fg};
                 font-size: 11px;
             }}
+
+            /* ── Branch switcher popover ── */
+            popover.branch-popover > contents {{
+                background: {status_bar_bg};
+                color: {status_bar_fg};
+                padding: 0;
+            }}
+            .branch-list {{
+                background-color: {status_bar_bg};
+            }}
+            .branch-list > row {{
+                background-color: transparent;
+                color: {status_bar_fg};
+                padding: 4px 0;
+                border-bottom: 1px solid alpha({status_bar_fg}, 0.1);
+            }}
+            .branch-list > row:hover {{
+                background-color: alpha({status_bar_fg}, 0.08);
+            }}
+            .branch-list > row:selected {{
+                background-color: alpha({status_bar_fg}, 0.15);
+            }}
+            .branch-name {{
+                color: {status_bar_fg};
+                font-weight: bold;
+                font-size: 13px;
+            }}
+            .branch-current {{
+                color: #73c991;
+            }}
             "#
         )
     } else {
@@ -335,6 +365,8 @@ pub fn apply_app_theme(scheme_id: &str) {
             .status-bar-label { font-size: 11px; }
             .status-bar-icon { -gtk-icon-size: 12px; }
             .status-bar-blame { font-size: 11px; }
+            .branch-name { font-weight: bold; font-size: 13px; }
+            .branch-current { color: #73c991; }
         "#
         .to_string()
     };

@@ -508,6 +508,19 @@ pub fn get_repo_info(root: &Path) -> Result<RepoInfo, git2::Error> {
     Ok(RepoInfo { name, branch })
 }
 
+/// Count the total number of changed files (staged + unstaged + untracked).
+///
+/// Lighter than `get_status` — only counts entries without building file lists.
+pub fn get_change_count(root: &Path) -> Result<usize, git2::Error> {
+    let repo = git2::Repository::discover(root)?;
+    let statuses = repo.statuses(Some(
+        git2::StatusOptions::new()
+            .include_untracked(true)
+            .recurse_untracked_dirs(true),
+    ))?;
+    Ok(statuses.len())
+}
+
 /// Format an epoch timestamp as a human-readable relative time string.
 fn format_relative_time(epoch: i64) -> String {
     let now = std::time::SystemTime::now()
@@ -564,6 +577,87 @@ fn format_relative_time(epoch: i64) -> String {
             }
         }
     }
+}
+
+/// Information about a local branch for the branch switcher.
+#[derive(Debug, Clone)]
+pub struct BranchInfo {
+    /// Branch name (e.g. "main", "feature/foo").
+    pub name: String,
+    /// First line of the most recent commit message on this branch.
+    pub last_commit_summary: String,
+    /// Whether this is the currently checked-out branch.
+    pub is_current: bool,
+}
+
+/// List local branches sorted by most recent commit time (newest first).
+///
+/// Returns up to `limit` branches. The current branch is always included
+/// and marked with `is_current = true`.
+pub fn list_branches(root: &Path, limit: usize) -> Result<Vec<BranchInfo>, git2::Error> {
+    let repo = git2::Repository::discover(root)?;
+
+    let current_branch = repo
+        .head()
+        .ok()
+        .and_then(|head| head.shorthand().map(String::from));
+
+    let mut branches: Vec<(String, i64, String, bool)> = Vec::new();
+
+    for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+        let (branch, _) = branch_result?;
+        let name = match branch.name()? {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let is_current = current_branch.as_deref() == Some(&name);
+
+        let (time, summary) = match branch.get().peel_to_commit() {
+            Ok(commit) => (
+                commit.time().seconds(),
+                commit.summary().unwrap_or("").to_string(),
+            ),
+            Err(_) => (0, String::new()),
+        };
+
+        branches.push((name, time, summary, is_current));
+    }
+
+    // Sort by commit time descending (most recent first).
+    branches.sort_by(|a, b| b.1.cmp(&a.1));
+    branches.truncate(limit);
+
+    Ok(branches
+        .into_iter()
+        .map(|(name, _, last_commit_summary, is_current)| BranchInfo {
+            name,
+            last_commit_summary,
+            is_current,
+        })
+        .collect())
+}
+
+/// Check out a local branch by name.
+///
+/// Equivalent to `git checkout <branch_name>`. Returns an error if the
+/// working tree has conflicts that prevent the switch.
+pub fn checkout_branch(root: &Path, branch_name: &str) -> Result<(), git2::Error> {
+    let repo = git2::Repository::discover(root)?;
+
+    let branch = repo.find_branch(branch_name, git2::BranchType::Local)?;
+    let ref_name = branch
+        .get()
+        .name()
+        .ok_or_else(|| git2::Error::from_str("branch ref has no name"))?
+        .to_string();
+
+    let object = repo.revparse_single(&ref_name)?;
+
+    repo.checkout_tree(&object, None)?;
+    repo.set_head(&ref_name)?;
+
+    Ok(())
 }
 
 /// Create a commit with the given message from the current index.

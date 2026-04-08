@@ -26,6 +26,9 @@ pub struct GitPanel {
     staged_collapsed: Rc<RefCell<bool>>,
     unstaged_collapsed: Rc<RefCell<bool>>,
     cached_status: Rc<RefCell<Option<GitStatusResult>>>,
+    /// Callback fired after every status refresh with the total change count.
+    #[allow(clippy::type_complexity)]
+    on_status_refreshed: Rc<RefCell<Option<Box<dyn Fn(usize)>>>>,
 }
 
 impl std::fmt::Debug for GitPanel {
@@ -139,6 +142,7 @@ impl GitPanel {
             staged_collapsed: Rc::new(RefCell::new(false)),
             unstaged_collapsed: Rc::new(RefCell::new(false)),
             cached_status: Rc::new(RefCell::new(None)),
+            on_status_refreshed: Rc::new(RefCell::new(None)),
         };
 
         // Wire refresh button.
@@ -415,8 +419,12 @@ impl GitPanel {
             Ok(Ok(status)) => {
                 let branch = status.branch_name.as_deref().unwrap_or("detached HEAD");
                 branch_label.set_text(&format!("\u{e0a0} {branch}"));
+                let count = status.staged.len() + status.unstaged.len();
                 cached.replace(Some(status));
                 panel.rebuild_store();
+                if let Some(ref cb) = *panel.on_status_refreshed.borrow() {
+                    cb(count);
+                }
                 glib::ControlFlow::Break
             }
             Ok(Err(e)) => {
@@ -700,6 +708,12 @@ impl GitPanel {
     /// Set the callback for opening a diff view.
     pub fn set_on_open_diff<F: Fn(&Path, bool) + 'static>(&self, f: F) {
         self.on_open_diff.replace(Some(Box::new(f)));
+    }
+
+    /// Set a callback that fires after every status refresh with the total
+    /// number of changed files (staged + unstaged).
+    pub fn set_on_status_refreshed<F: Fn(usize) + 'static>(&self, f: F) {
+        self.on_status_refreshed.replace(Some(Box::new(f)));
     }
 
     /// The container widget.

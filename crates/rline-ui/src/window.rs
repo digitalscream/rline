@@ -29,6 +29,12 @@ mod imp {
         pub status_bar: RefCell<Option<StatusBar>>,
         pub left_stack: RefCell<Option<gtk4::Stack>>,
         pub project_root: RefCell<Option<PathBuf>>,
+        /// File monitors watching `.git/index` and `.git/HEAD` for change count updates.
+        pub git_monitors: RefCell<Vec<gio::FileMonitor>>,
+        /// Periodic timer for polling working-tree changes.
+        pub git_timer: RefCell<Option<glib::SourceId>>,
+        /// Debounce source for file-monitor–triggered refreshes.
+        pub git_count_pending: RefCell<Option<glib::SourceId>>,
     }
 
     #[glib::object_subclass]
@@ -215,6 +221,19 @@ impl RlineWindow {
         // Wire action buttons (needs the window reference for confirmation dialogs).
         git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
 
+        // Update the Git tab title with the change count after each refresh.
+        let stack_for_count = stack.clone();
+        git_panel.set_on_status_refreshed(move |count| {
+            if let Some(child) = stack_for_count.child_by_name("git") {
+                let page = stack_for_count.page(&child);
+                if count > 0 {
+                    page.set_title(&format!("Git [{count}]"));
+                } else {
+                    page.set_title("Git");
+                }
+            }
+        });
+
         // Auto-refresh git panel when the tab becomes visible.
         let gp_for_stack = git_panel.clone();
         stack.connect_notify_local(Some("visible-child-name"), move |stack, _| {
@@ -245,6 +264,8 @@ impl RlineWindow {
                     if let Some(ref sb) = *imp.status_bar.borrow() {
                         sb.set_project_root(&path);
                     }
+                    imp.project_root.replace(Some(path.clone()));
+                    self.start_git_change_watcher(&path);
                 }
             }
         }
@@ -321,6 +342,7 @@ impl RlineWindow {
                 sp.set_project_root(root);
                 gp.set_project_root(root);
                 sb_root.set_project_root(root);
+                window.start_git_change_watcher(root);
 
                 // Persist last project path for next startup
                 if let Ok(mut settings) = rline_config::EditorSettings::load() {
@@ -594,6 +616,114 @@ impl RlineWindow {
             }
         ));
         self.add_controller(key_ctl);
+    }
+
+    /// Start watching the git repository for changes and keep the Git tab
+    /// content and title badge up to date.
+    fn start_git_change_watcher(&self, root: &std::path::Path) {
+        let imp = self.imp();
+
+        // Drop old monitors and timer.
+        imp.git_monitors.borrow_mut().clear();
+        if let Some(timer_id) = imp.git_timer.borrow_mut().take() {
+            timer_id.remove();
+        }
+        if let Some(pending) = imp.git_count_pending.borrow_mut().take() {
+            pending.remove();
+        }
+
+        // Initial refresh.
+        self.refresh_git_panel();
+
+        // Watch .git/index for stage/unstage/commit changes.
+        let git_index = root.join(".git").join("index");
+        if git_index.exists() {
+            let file = gio::File::for_path(&git_index);
+            if let Ok(monitor) =
+                file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            {
+                monitor.connect_changed(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_, _, _, event| {
+                        if matches!(
+                            event,
+                            gio::FileMonitorEvent::Changed | gio::FileMonitorEvent::Created
+                        ) {
+                            window.schedule_git_refresh();
+                        }
+                    }
+                ));
+                imp.git_monitors.borrow_mut().push(monitor);
+            }
+        }
+
+        // Watch .git/HEAD for branch switches (which change the set of changes).
+        let git_head = root.join(".git").join("HEAD");
+        if git_head.exists() {
+            let file = gio::File::for_path(&git_head);
+            if let Ok(monitor) =
+                file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            {
+                monitor.connect_changed(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_, _, _, event| {
+                        if matches!(
+                            event,
+                            gio::FileMonitorEvent::Changed | gio::FileMonitorEvent::Created
+                        ) {
+                            window.schedule_git_refresh();
+                        }
+                    }
+                ));
+                imp.git_monitors.borrow_mut().push(monitor);
+            }
+        }
+
+        // Periodic timer for working-tree changes (every 2 seconds).
+        let timer_id = glib::timeout_add_local(
+            std::time::Duration::from_secs(2),
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    window.refresh_git_panel();
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+        imp.git_timer.borrow_mut().replace(timer_id);
+    }
+
+    /// Schedule a debounced git panel refresh (300ms) for file-monitor events.
+    fn schedule_git_refresh(&self) {
+        let imp = self.imp();
+        if let Some(pending) = imp.git_count_pending.borrow_mut().take() {
+            pending.remove();
+        }
+        let source_id = glib::timeout_add_local_once(
+            std::time::Duration::from_millis(300),
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move || {
+                    window.imp().git_count_pending.borrow_mut().take();
+                    window.refresh_git_panel();
+                }
+            ),
+        );
+        imp.git_count_pending.borrow_mut().replace(source_id);
+    }
+
+    /// Trigger a git panel refresh. The panel's `on_status_refreshed` callback
+    /// (wired in `setup_layout`) updates the tab title with the change count.
+    fn refresh_git_panel(&self) {
+        if let Some(ref gp) = *self.imp().git_panel.borrow() {
+            gp.refresh();
+        }
     }
 
     fn action_open_file(&self) {
