@@ -40,6 +40,46 @@ pub fn vscode_extension_dirs() -> Vec<PathBuf> {
     candidates.into_iter().filter(|p| p.is_dir()).collect()
 }
 
+/// Returns directories containing installed Zed theme extensions.
+///
+/// Checks `~/.local/share/zed/extensions/installed/` for extension
+/// directories that may contain theme JSON files.
+pub fn zed_extension_dirs() -> Vec<PathBuf> {
+    let Some(base) = directories::BaseDirs::new() else {
+        return Vec::new();
+    };
+
+    let installed = base
+        .data_dir()
+        .join("zed")
+        .join("extensions")
+        .join("installed");
+
+    if !installed.is_dir() {
+        return Vec::new();
+    }
+
+    match std::fs::read_dir(&installed) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Returns the Zed user themes directory (`~/.config/zed/themes/`).
+pub fn zed_user_themes_dir() -> Option<PathBuf> {
+    let base = directories::BaseDirs::new()?;
+    let dir = base.config_dir().join("zed").join("themes");
+    if dir.is_dir() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

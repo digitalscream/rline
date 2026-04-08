@@ -195,6 +195,81 @@ impl SyntaxTheme {
             ui_colors,
         }
     }
+
+    /// Build a [`SyntaxTheme`] from a Zed theme's `style` object.
+    ///
+    /// Extracts `syntax` entries as scope rules and maps Zed UI color keys
+    /// to VS Code UI color keys so that `theming.rs` can consume them unchanged.
+    pub fn from_zed_json(scheme_id: &str, name: &str, style: &serde_json::Value) -> Self {
+        use crate::zed_import::ZED_UI_COLOR_MAP;
+
+        let mut rules = Vec::new();
+
+        // Extract syntax rules
+        if let Some(syntax) = style.get("syntax").and_then(|v| v.as_object()) {
+            for (key, value) in syntax {
+                let color = value
+                    .get("color")
+                    .and_then(|v| v.as_str())
+                    .map(normalize_color);
+                let font_style = value.get("font_style").and_then(|v| v.as_str());
+                let font_weight = value.get("font_weight").and_then(|v| v.as_f64());
+
+                if color.is_none() && font_style.is_none() && font_weight.is_none() {
+                    continue;
+                }
+
+                let style = TokenStyle {
+                    foreground: color,
+                    bold: font_weight.is_some_and(|w| w >= 700.0),
+                    italic: font_style == Some("italic"),
+                    underline: false,
+                    strikethrough: false,
+                };
+
+                rules.push(ScopeRule {
+                    scope: key.clone(),
+                    style,
+                });
+            }
+        }
+
+        // Map Zed UI colors to VS Code UI color keys
+        let mut ui_colors = HashMap::new();
+
+        for &(zed_key, vscode_key) in ZED_UI_COLOR_MAP {
+            if let Some(color) = style.get(zed_key).and_then(|v| v.as_str()) {
+                ui_colors.insert(vscode_key.to_string(), normalize_color(color));
+            }
+        }
+
+        // Special handling for players[0] cursor and selection
+        if let Some(player0) = style
+            .get("players")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+        {
+            if let Some(cursor) = player0.get("cursor").and_then(|v| v.as_str()) {
+                ui_colors.insert(
+                    "editorCursor.foreground".to_string(),
+                    normalize_color(cursor),
+                );
+            }
+            if let Some(selection) = player0.get("selection").and_then(|v| v.as_str()) {
+                ui_colors.insert(
+                    "editor.selectionBackground".to_string(),
+                    normalize_color(selection),
+                );
+            }
+        }
+
+        Self {
+            scheme_id: scheme_id.to_string(),
+            name: name.to_string(),
+            rules,
+            ui_colors,
+        }
+    }
 }
 
 /// Extract scopes from a tokenColors rule entry.

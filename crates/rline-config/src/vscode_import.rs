@@ -534,7 +534,7 @@ fn extract_scopes(rule: &serde_json::Value) -> Vec<String> {
 /// Normalize a VS Code hex color to `#RRGGBB` format.
 ///
 /// Strips alpha channel from `#RRGGBBAA` format.
-fn normalize_color(color: &str) -> String {
+pub(crate) fn normalize_color(color: &str) -> String {
     let color = color.trim();
     if color.len() == 9 && color.starts_with('#') {
         // #RRGGBBAA → #RRGGBB
@@ -559,7 +559,7 @@ fn extract_color(
 }
 
 /// Escape special XML characters in attribute values.
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

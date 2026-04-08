@@ -176,19 +176,33 @@ impl SettingsDialog {
         }
         theme_row.append(&theme_dropdown);
 
-        // Import VS Code theme
+        // Import theme buttons
         let import_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
         import_row.set_halign(gtk4::Align::End);
-        let import_btn = gtk4::Button::with_label("Import VS Code Theme...");
-        import_row.append(&import_btn);
 
-        import_btn.connect_clicked(glib::clone!(
+        let import_vscode_btn = gtk4::Button::with_label("Import VS Code Theme...");
+        import_row.append(&import_vscode_btn);
+
+        let import_zed_btn = gtk4::Button::with_label("Import Zed Theme...");
+        import_row.append(&import_zed_btn);
+
+        import_vscode_btn.connect_clicked(glib::clone!(
             #[weak]
             window,
             #[weak]
             theme_dropdown,
             move |_| {
                 Self::show_vscode_import_dialog(&window, &theme_dropdown);
+            }
+        ));
+
+        import_zed_btn.connect_clicked(glib::clone!(
+            #[weak]
+            window,
+            #[weak]
+            theme_dropdown,
+            move |_| {
+                Self::show_zed_import_dialog(&window, &theme_dropdown);
             }
         ));
 
@@ -622,6 +636,173 @@ impl SettingsDialog {
         use sourceview5::prelude::*;
 
         let scheme_id = vscode_import::import_vscode_theme(entry)?;
+
+        // Add the user styles directory to the search path and rescan
+        let scheme_manager = sourceview5::StyleSchemeManager::default();
+        if let Ok(styles_dir) = rline_config::paths::gtksourceview_styles_dir() {
+            let styles_path = styles_dir.to_string_lossy().to_string();
+            let current_paths = scheme_manager.search_path();
+            if !current_paths.iter().any(|p| p.as_str() == styles_path) {
+                scheme_manager.append_search_path(&styles_path);
+            }
+        }
+        scheme_manager.force_rescan();
+
+        // Add the new scheme ID to the dropdown model
+        if let Some(model) = theme_dropdown.model() {
+            if let Ok(string_list) = model.downcast::<gtk4::StringList>() {
+                string_list.append(&scheme_id);
+                // Select the newly imported theme
+                let new_idx = string_list.n_items() - 1;
+                theme_dropdown.set_selected(new_idx);
+            }
+        }
+
+        Ok(scheme_id)
+    }
+
+    /// Show a dialog to import a Zed theme.
+    fn show_zed_import_dialog(parent: &gtk4::Window, theme_dropdown: &gtk4::DropDown) {
+        use rline_config::zed_import;
+
+        let themes = zed_import::discover_zed_themes();
+        if themes.is_empty() {
+            let alert = gtk4::AlertDialog::builder()
+                .message("No Zed Themes Found")
+                .detail("No Zed installation with themes was found on this system.\n\nChecked: ~/.local/share/zed/extensions/installed, ~/.config/zed/themes")
+                .build();
+            alert.show(Some(parent));
+            return;
+        }
+
+        let dialog = gtk4::Window::builder()
+            .title("Import Zed Theme")
+            .modal(true)
+            .transient_for(parent)
+            .default_width(450)
+            .default_height(350)
+            .build();
+
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+
+        let label = gtk4::Label::new(Some("Select a theme to import:"));
+        label.set_halign(gtk4::Align::Start);
+        content.append(&label);
+
+        // Build a scrollable list of themes
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .vexpand(true)
+            .hexpand(true)
+            .min_content_height(200)
+            .build();
+
+        let list_box = gtk4::ListBox::new();
+        list_box.set_selection_mode(gtk4::SelectionMode::Single);
+
+        for theme in &themes {
+            let row_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+            row_box.set_margin_top(4);
+            row_box.set_margin_bottom(4);
+            row_box.set_margin_start(8);
+            row_box.set_margin_end(8);
+
+            let name_label = gtk4::Label::new(Some(&theme.label));
+            name_label.set_halign(gtk4::Align::Start);
+            name_label.add_css_class("heading");
+
+            let detail = format!("{} ({} theme)", theme.source, theme.appearance);
+            let detail_label = gtk4::Label::new(Some(&detail));
+            detail_label.set_halign(gtk4::Align::Start);
+            detail_label.add_css_class("dim-label");
+
+            row_box.append(&name_label);
+            row_box.append(&detail_label);
+            list_box.append(&row_box);
+        }
+
+        scrolled.set_child(Some(&list_box));
+        content.append(&scrolled);
+
+        // Buttons
+        let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        button_box.set_halign(gtk4::Align::End);
+        button_box.set_margin_top(8);
+
+        let cancel_btn = gtk4::Button::with_label("Cancel");
+        let import_btn = gtk4::Button::with_label("Import");
+        import_btn.add_css_class("suggested-action");
+
+        button_box.append(&cancel_btn);
+        button_box.append(&import_btn);
+        content.append(&button_box);
+
+        dialog.set_child(Some(&content));
+
+        cancel_btn.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            move |_| {
+                dialog.close();
+            }
+        ));
+
+        let themes = Rc::new(themes);
+        import_btn.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            #[weak]
+            list_box,
+            #[weak]
+            theme_dropdown,
+            #[strong]
+            themes,
+            move |_| {
+                let Some(row) = list_box.selected_row() else {
+                    return;
+                };
+                let idx = row.index() as usize;
+                let Some(entry) = themes.get(idx) else {
+                    return;
+                };
+
+                match Self::import_zed_theme(entry, &theme_dropdown) {
+                    Ok(scheme_id) => {
+                        tracing::info!("imported Zed theme as: {scheme_id}");
+                        dialog.close();
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to import Zed theme: {e}");
+                        let alert = gtk4::AlertDialog::builder()
+                            .message("Import Failed")
+                            .detail(format!("Could not import theme: {e}"))
+                            .build();
+                        alert.show(Some(&dialog));
+                    }
+                }
+            }
+        ));
+
+        // Select the first row by default
+        if let Some(first_row) = list_box.row_at_index(0) {
+            list_box.select_row(Some(&first_row));
+        }
+
+        dialog.present();
+    }
+
+    /// Import a single Zed theme: convert, install, and update the dropdown.
+    fn import_zed_theme(
+        entry: &rline_config::zed_import::ZedThemeEntry,
+        theme_dropdown: &gtk4::DropDown,
+    ) -> Result<String, rline_config::ConfigError> {
+        use rline_config::zed_import;
+        use sourceview5::prelude::*;
+
+        let scheme_id = zed_import::import_zed_theme(entry)?;
 
         // Add the user styles directory to the search path and rescan
         let scheme_manager = sourceview5::StyleSchemeManager::default();
