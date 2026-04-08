@@ -464,6 +464,23 @@ impl EditorPane {
         &self.notebook
     }
 
+    /// The file paths of all open editor tabs (not diff tabs), in tab order.
+    pub fn open_file_paths(&self) -> Vec<PathBuf> {
+        self.tabs
+            .borrow()
+            .iter()
+            .filter_map(|t| match t {
+                TabKind::Editor(tab) => tab.file_path(),
+                TabKind::Diff(_) => None,
+            })
+            .collect()
+    }
+
+    /// The notebook page index of the currently focused tab, if any.
+    pub fn active_tab_index(&self) -> Option<u32> {
+        self.notebook.current_page()
+    }
+
     /// All dedup keys for currently open tabs, used by `SplitContainer` to
     /// rebuild its cross-pane path index.
     pub fn dedup_keys(&self) -> Vec<PathBuf> {

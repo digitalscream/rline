@@ -7,5 +7,5 @@ pub mod syntax_theme;
 pub mod vscode_import;
 
 pub use error::ConfigError;
-pub use settings::EditorSettings;
+pub use settings::{EditorSettings, PaneState, SessionState};
 pub use syntax_theme::SyntaxTheme;

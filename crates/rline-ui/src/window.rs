@@ -55,7 +55,13 @@ mod imp {
     }
 
     impl WidgetImpl for RlineWindow {}
-    impl WindowImpl for RlineWindow {}
+    impl WindowImpl for RlineWindow {
+        fn close_request(&self) -> glib::Propagation {
+            let window = self.obj();
+            window.save_session();
+            self.parent_close_request()
+        }
+    }
     impl ApplicationWindowImpl for RlineWindow {}
 }
 
@@ -274,6 +280,11 @@ impl RlineWindow {
         // opens in the project directory rather than $HOME.
         if let Some(ref tp) = *imp.terminal_pane.borrow() {
             tp.add_terminal(None);
+        }
+
+        // Restore previously open editor tabs from the last session.
+        if settings.open_last_project {
+            self.restore_session();
         }
     }
 
@@ -723,6 +734,32 @@ impl RlineWindow {
     fn refresh_git_panel(&self) {
         if let Some(ref gp) = *self.imp().git_panel.borrow() {
             gp.refresh();
+        }
+    }
+
+    /// Persist the current session state (open files and split layout) to disk.
+    fn save_session(&self) {
+        let imp = self.imp();
+        if let Some(ref sc) = *imp.split_container.borrow() {
+            let state = sc.session_state();
+            if let Err(e) = state.save() {
+                tracing::warn!("failed to save session state: {e}");
+            }
+        }
+    }
+
+    /// Restore previously open files from the saved session state.
+    fn restore_session(&self) {
+        let imp = self.imp();
+        let session = rline_config::SessionState::load();
+
+        // Only restore if there are files to open.
+        if session.left.files.is_empty() {
+            return;
+        }
+
+        if let Some(ref sc) = *imp.split_container.borrow() {
+            sc.restore_session(&session);
         }
     }
 

@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 
-use rline_config::EditorSettings;
+use rline_config::{EditorSettings, PaneState, SessionState};
 use rline_core::LineIndex;
 
 use super::editor_pane::EditorPane;
@@ -208,6 +208,107 @@ impl SplitContainer {
     /// (tab switch or pane focus change in split mode).
     pub fn set_on_active_file_changed<F: Fn(Option<PathBuf>) + 'static>(&self, f: F) {
         self.on_active_file_changed.replace(Some(Box::new(f)));
+    }
+
+    /// Collect the current session state (open files and active tabs) for
+    /// persistence across restarts.
+    pub fn session_state(&self) -> SessionState {
+        let state = self.state.borrow();
+        match &*state {
+            SplitState::Single { pane } => SessionState {
+                left: PaneState {
+                    files: pane
+                        .open_file_paths()
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
+                    active_tab: pane.active_tab_index(),
+                },
+                right: None,
+            },
+            SplitState::Split { left, right, .. } => SessionState {
+                left: PaneState {
+                    files: left
+                        .open_file_paths()
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
+                    active_tab: left.active_tab_index(),
+                },
+                right: Some(PaneState {
+                    files: right
+                        .open_file_paths()
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect(),
+                    active_tab: right.active_tab_index(),
+                }),
+            },
+        }
+    }
+
+    /// Restore a previously saved session state, opening files in the
+    /// appropriate panes. Files that no longer exist are silently skipped.
+    pub fn restore_session(&self, session: &SessionState) {
+        // Open left pane files.
+        for file_str in &session.left.files {
+            let path = std::path::PathBuf::from(file_str);
+            if path.is_file() {
+                if let Err(e) = self.open_file(&path) {
+                    tracing::warn!("session restore: failed to open {}: {e}", path.display());
+                }
+            }
+        }
+
+        // Restore active tab in left pane.
+        if let Some(active) = session.left.active_tab {
+            let state = self.state.borrow();
+            if let SplitState::Single { pane } = &*state {
+                if (active as usize) < pane.tab_count() {
+                    pane.focus_tab(active as usize);
+                }
+            }
+        }
+
+        // If there was a right pane, split and open those files.
+        if let Some(ref right_state) = session.right {
+            if !right_state.files.is_empty() {
+                self.split_vertical();
+
+                // Now open the right pane's files (active pane is now Right
+                // after split_vertical).
+                for file_str in &right_state.files {
+                    let path = std::path::PathBuf::from(file_str);
+                    if path.is_file() {
+                        if let Err(e) = self.open_file(&path) {
+                            tracing::warn!(
+                                "session restore: failed to open {}: {e}",
+                                path.display()
+                            );
+                        }
+                    }
+                }
+
+                // Restore active tab in right pane.
+                if let Some(active) = right_state.active_tab {
+                    if let Some(right_pane) = self.get_pane(PaneId::Right) {
+                        if (active as usize) < right_pane.tab_count() {
+                            right_pane.focus_tab(active as usize);
+                        }
+                    }
+                }
+
+                // Restore active tab in left pane (split_vertical may have
+                // changed it).
+                if let Some(active) = session.left.active_tab {
+                    if let Some(left_pane) = self.get_pane(PaneId::Left) {
+                        if (active as usize) < left_pane.tab_count() {
+                            left_pane.focus_tab(active as usize);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Split the editor area vertically into two panes. The currently active
