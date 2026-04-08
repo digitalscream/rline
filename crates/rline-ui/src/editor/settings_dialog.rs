@@ -27,7 +27,7 @@ impl SettingsDialog {
             .modal(true)
             .transient_for(parent)
             .default_width(450)
-            .default_height(480)
+            .default_height(580)
             .build();
 
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
@@ -133,6 +133,31 @@ impl SettingsDialog {
         cycle_spin.set_value(settings.tab_cycle_depth as f64);
         cycle_row.append(&cycle_spin);
 
+        // ── Letter spacing ──
+        let letter_spacing_row = Self::make_row("Letter Spacing (px)");
+        let letter_spacing_spin = gtk4::SpinButton::with_range(0.0, 5.0, 0.1);
+        letter_spacing_spin.set_digits(1);
+        letter_spacing_spin.set_value(settings.letter_spacing);
+        letter_spacing_row.append(&letter_spacing_spin);
+
+        // ── Line height ──
+        let line_height_row = Self::make_row("Line Height");
+        let line_height_spin = gtk4::SpinButton::with_range(1.0, 3.0, 0.1);
+        line_height_spin.set_digits(1);
+        line_height_spin.set_value(settings.line_height);
+        line_height_row.append(&line_height_spin);
+
+        // ── Hint level ──
+        let hint_row = Self::make_row("Font Hinting");
+        let hint_dropdown = gtk4::DropDown::from_strings(&["full", "slight"]);
+        let hint_idx = if settings.hint_style == "slight" {
+            1
+        } else {
+            0
+        };
+        hint_dropdown.set_selected(hint_idx);
+        hint_row.append(&hint_dropdown);
+
         // ── Tree-sitter highlighting ──
         let treesitter_row = Self::make_row("Tree-sitter Highlighting");
         let treesitter_switch = gtk4::Switch::new();
@@ -156,6 +181,9 @@ impl SettingsDialog {
         content.append(&import_row);
         content.append(&editor_font_row);
         content.append(&font_row);
+        content.append(&letter_spacing_row);
+        content.append(&line_height_row);
+        content.append(&hint_row);
         content.append(&tab_width_row);
         content.append(&insert_spaces_row);
         content.append(&term_font_fam_row);
@@ -189,6 +217,9 @@ impl SettingsDialog {
                 move |theme_dropdown: &gtk4::DropDown,
                       editor_font_dropdown: &gtk4::DropDown,
                       font_spin: &gtk4::SpinButton,
+                      letter_spacing_spin: &gtk4::SpinButton,
+                      line_height_spin: &gtk4::SpinButton,
+                      hint_dropdown: &gtk4::DropDown,
                       tab_width_spin: &gtk4::SpinButton,
                       insert_spaces_switch: &gtk4::Switch,
                       term_font_dropdown: &gtk4::DropDown,
@@ -216,11 +247,20 @@ impl SettingsDialog {
                         .cloned()
                         .unwrap_or_else(|| "Monospace".to_owned());
 
+                    let hint_style = hint_dropdown
+                        .selected_item()
+                        .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
+                        .map(|so| so.string().to_string())
+                        .unwrap_or_else(|| "full".to_owned());
+
                     let existing = EditorSettings::load().unwrap_or_default();
                     let new_settings = EditorSettings {
                         theme,
                         editor_font_family: editor_font,
                         font_size: font_spin.value() as u32,
+                        letter_spacing: letter_spacing_spin.value(),
+                        line_height: line_height_spin.value(),
+                        hint_style,
                         tab_width: tab_width_spin.value() as u32,
                         insert_spaces: insert_spaces_switch.is_active(),
                         terminal_font_family: terminal_font,
@@ -251,6 +291,12 @@ impl SettingsDialog {
             #[weak]
             font_spin,
             #[weak]
+            letter_spacing_spin,
+            #[weak]
+            line_height_spin,
+            #[weak]
+            hint_dropdown,
+            #[weak]
             tab_width_spin,
             #[weak]
             insert_spaces_switch,
@@ -271,6 +317,9 @@ impl SettingsDialog {
                     &theme_dropdown,
                     &editor_font_dropdown,
                     &font_spin,
+                    &letter_spacing_spin,
+                    &line_height_spin,
+                    &hint_dropdown,
                     &tab_width_spin,
                     &insert_spaces_switch,
                     &term_font_dropdown,
@@ -294,6 +343,12 @@ impl SettingsDialog {
             #[weak]
             font_spin,
             #[weak]
+            letter_spacing_spin,
+            #[weak]
+            line_height_spin,
+            #[weak]
+            hint_dropdown,
+            #[weak]
             tab_width_spin,
             #[weak]
             insert_spaces_switch,
@@ -314,6 +369,9 @@ impl SettingsDialog {
                     &theme_dropdown,
                     &editor_font_dropdown,
                     &font_spin,
+                    &letter_spacing_spin,
+                    &line_height_spin,
+                    &hint_dropdown,
                     &tab_width_spin,
                     &insert_spaces_switch,
                     &term_font_dropdown,

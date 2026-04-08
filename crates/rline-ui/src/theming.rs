@@ -103,19 +103,26 @@ pub fn terminal_colors_for_scheme(scheme_id: &str) -> Option<TerminalColors> {
 /// Extracts the editor background color, derives a chrome palette from it,
 /// sets the GTK dark theme preference accordingly, and applies global CSS
 /// covering all UI elements.
-pub fn apply_app_theme(scheme_id: &str) {
-    // Configure font rendering for maximum crispness.
+/// Apply font rendering settings (hinting, antialiasing).
+///
+/// `hint_style` should be `"full"` or `"slight"`. Full hinting snaps glyphs
+/// to the pixel grid for maximum crispness; slight hinting preserves glyph
+/// shapes at the cost of some softness.
+pub fn apply_font_rendering(hint_style: &str) {
     if let Some(settings) = gtk4::Settings::default() {
-        // Take manual control of font rendering instead of letting GTK decide.
         settings.set_gtk_font_rendering(gtk4::FontRendering::Manual);
-        // Snap font metrics to pixel boundaries — eliminates fuzzy glyphs.
         settings.set_gtk_hint_font_metrics(true);
-        // Full hinting aligns glyphs precisely to the pixel grid.
         settings.set_gtk_xft_antialias(1);
         settings.set_gtk_xft_hinting(1);
-        settings.set_gtk_xft_hintstyle(Some("hintfull"));
+        let style = match hint_style {
+            "slight" => "hintslight",
+            _ => "hintfull",
+        };
+        settings.set_gtk_xft_hintstyle(Some(style));
     }
+}
 
+pub fn apply_app_theme(scheme_id: &str) {
     let scheme_manager = sourceview5::StyleSchemeManager::default();
     let scheme = match scheme_manager.scheme(scheme_id) {
         Some(s) => s,

@@ -65,7 +65,13 @@ impl EditorTab {
         Self::apply_theme_to_buffer(&buffer, &settings.theme);
 
         // Apply font
-        Self::apply_editor_font(&view, &settings.editor_font_family, settings.font_size);
+        Self::apply_editor_font(
+            &view,
+            &settings.editor_font_family,
+            settings.font_size,
+            settings.letter_spacing,
+            settings.line_height,
+        );
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(&view)
@@ -246,7 +252,13 @@ impl EditorTab {
             self.view.set_wrap_mode(gtk4::WrapMode::None);
         }
         Self::apply_theme_to_buffer(&self.buffer, &settings.theme);
-        Self::apply_editor_font(&self.view, &settings.editor_font_family, settings.font_size);
+        Self::apply_editor_font(
+            &self.view,
+            &settings.editor_font_family,
+            settings.font_size,
+            settings.letter_spacing,
+            settings.line_height,
+        );
 
         // Rebuild tree-sitter tags from the new theme and re-highlight
         if let Some(ref mut hl) = *self.highlighter.borrow_mut() {
@@ -290,7 +302,13 @@ impl EditorTab {
     /// Re-uses a single CSS provider per thread to avoid leaking providers on
     /// repeated calls. When the default `"Monospace"` family is specified, a
     /// fallback chain of popular coding fonts is used instead.
-    pub fn apply_editor_font(view: &sourceview5::View, font_family: &str, font_size: u32) {
+    pub fn apply_editor_font(
+        view: &sourceview5::View,
+        font_family: &str,
+        font_size: u32,
+        letter_spacing: f64,
+        line_height: f64,
+    ) {
         use std::cell::RefCell;
 
         thread_local! {
@@ -306,7 +324,7 @@ impl EditorTab {
         };
 
         let css = format!(
-            "textview {{ font-family: {font_css}; font-size: {font_size}px; line-height: 1.4; font-feature-settings: \"liga\" 0, \"calt\" 1; }}"
+            "textview {{ font-family: {font_css}; font-size: {font_size}px; line-height: {line_height}; letter-spacing: {letter_spacing}px; font-feature-settings: \"liga\" 0, \"calt\" 1; }}"
         );
 
         let display = view.display();

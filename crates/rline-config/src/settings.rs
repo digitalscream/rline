@@ -42,6 +42,15 @@ pub struct EditorSettings {
     /// Number of most-recently-used tabs to cycle through with Ctrl+Tab.
     #[serde(default = "default_tab_cycle_depth")]
     pub tab_cycle_depth: u32,
+    /// Extra letter spacing in pixels (can be fractional, e.g. 0.5).
+    #[serde(default)]
+    pub letter_spacing: f64,
+    /// Line height multiplier (e.g. 1.4 means 140% of the font height).
+    #[serde(default = "default_line_height")]
+    pub line_height: f64,
+    /// Font hinting level: "full" for maximum crispness, "slight" for smoother shapes.
+    #[serde(default = "default_hint_style")]
+    pub hint_style: String,
 }
 
 impl Default for EditorSettings {
@@ -61,6 +70,9 @@ impl Default for EditorSettings {
             search_auto_expand_threshold: 5,
             use_treesitter: true,
             tab_cycle_depth: default_tab_cycle_depth(),
+            letter_spacing: 0.0,
+            line_height: default_line_height(),
+            hint_style: default_hint_style(),
         }
     }
 }
@@ -73,6 +85,16 @@ fn default_true() -> bool {
 /// Default number of MRU tabs to cycle through with Ctrl+Tab.
 fn default_tab_cycle_depth() -> u32 {
     10
+}
+
+/// Default line height multiplier.
+fn default_line_height() -> f64 {
+    1.4
+}
+
+/// Default font hinting level.
+fn default_hint_style() -> String {
+    "full".to_owned()
 }
 
 impl EditorSettings {
@@ -224,6 +246,9 @@ mod tests {
             search_auto_expand_threshold: 10,
             use_treesitter: false,
             tab_cycle_depth: 5,
+            letter_spacing: 0.5,
+            line_height: 1.6,
+            hint_style: "slight".to_owned(),
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

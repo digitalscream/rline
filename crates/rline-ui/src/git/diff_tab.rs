@@ -172,6 +172,8 @@ impl DiffTab {
             &view,
             &settings.editor_font_family,
             settings.font_size,
+            settings.letter_spacing,
+            settings.line_height,
         );
 
         view
@@ -385,6 +387,8 @@ impl DiffTab {
                 view,
                 &settings.editor_font_family,
                 settings.font_size,
+                settings.letter_spacing,
+                settings.line_height,
             );
         }
         Self::apply_theme(&self.left_buffer, &settings.theme);
