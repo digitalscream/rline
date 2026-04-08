@@ -51,6 +51,41 @@ pub struct EditorSettings {
     /// Font hinting level: "full" for maximum crispness, "slight" for smoother shapes.
     #[serde(default = "default_hint_style")]
     pub hint_style: String,
+
+    // ── AI Completion ──
+    /// Whether AI inline completion is enabled.
+    #[serde(default)]
+    pub ai_enabled: bool,
+    /// Full URL to the OpenAI-compatible completions endpoint.
+    #[serde(default = "default_ai_endpoint_url")]
+    pub ai_endpoint_url: String,
+    /// Bearer token for the completion API (empty = no auth header).
+    #[serde(default)]
+    pub ai_api_key: String,
+    /// Model identifier sent in completion requests.
+    #[serde(default)]
+    pub ai_model: String,
+    /// Milliseconds to wait after typing before requesting a completion.
+    #[serde(default = "default_ai_debounce_ms")]
+    pub ai_debounce_ms: u32,
+    /// Maximum number of tokens to generate per completion.
+    #[serde(default = "default_ai_max_tokens")]
+    pub ai_max_tokens: u32,
+    /// Number of lines before the cursor to include as context.
+    #[serde(default = "default_ai_context_lines_before")]
+    pub ai_context_lines_before: u32,
+    /// Number of lines after the cursor to include as context.
+    #[serde(default = "default_ai_context_lines_after")]
+    pub ai_context_lines_after: u32,
+    /// Maximum number of lines to display in a completion suggestion (0 = unlimited).
+    #[serde(default = "default_ai_max_lines")]
+    pub ai_max_lines: u32,
+    /// Sampling temperature (0.0 = deterministic).
+    #[serde(default)]
+    pub ai_temperature: f64,
+    /// Trigger mode: `"automatic"`, `"manual"`, or `"both"`.
+    #[serde(default = "default_ai_trigger_mode")]
+    pub ai_trigger_mode: String,
 }
 
 impl Default for EditorSettings {
@@ -73,6 +108,17 @@ impl Default for EditorSettings {
             letter_spacing: 0.0,
             line_height: default_line_height(),
             hint_style: default_hint_style(),
+            ai_enabled: false,
+            ai_endpoint_url: default_ai_endpoint_url(),
+            ai_api_key: String::new(),
+            ai_model: String::new(),
+            ai_debounce_ms: default_ai_debounce_ms(),
+            ai_max_tokens: default_ai_max_tokens(),
+            ai_context_lines_before: default_ai_context_lines_before(),
+            ai_context_lines_after: default_ai_context_lines_after(),
+            ai_max_lines: default_ai_max_lines(),
+            ai_temperature: 0.0,
+            ai_trigger_mode: default_ai_trigger_mode(),
         }
     }
 }
@@ -95,6 +141,41 @@ fn default_line_height() -> f64 {
 /// Default font hinting level.
 fn default_hint_style() -> String {
     "full".to_owned()
+}
+
+/// Default AI completion endpoint URL.
+fn default_ai_endpoint_url() -> String {
+    "http://localhost:8080/v1/completions".to_owned()
+}
+
+/// Default debounce delay for AI completion requests.
+fn default_ai_debounce_ms() -> u32 {
+    500
+}
+
+/// Default maximum tokens for AI completion.
+fn default_ai_max_tokens() -> u32 {
+    128
+}
+
+/// Default number of context lines before the cursor.
+fn default_ai_context_lines_before() -> u32 {
+    256
+}
+
+/// Default number of context lines after the cursor.
+fn default_ai_context_lines_after() -> u32 {
+    64
+}
+
+/// Default maximum lines for AI completion (0 = unlimited).
+fn default_ai_max_lines() -> u32 {
+    10
+}
+
+/// Default trigger mode for AI completion.
+fn default_ai_trigger_mode() -> String {
+    "automatic".to_owned()
 }
 
 impl EditorSettings {
@@ -249,6 +330,17 @@ mod tests {
             letter_spacing: 0.5,
             line_height: 1.6,
             hint_style: "slight".to_owned(),
+            ai_enabled: true,
+            ai_endpoint_url: "http://example.com/v1/completions".to_owned(),
+            ai_api_key: "sk-test-key".to_owned(),
+            ai_model: "codellama".to_owned(),
+            ai_debounce_ms: 300,
+            ai_max_tokens: 256,
+            ai_context_lines_before: 128,
+            ai_context_lines_after: 32,
+            ai_max_lines: 5,
+            ai_temperature: 0.2,
+            ai_trigger_mode: "both".to_owned(),
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");
@@ -291,6 +383,39 @@ mod tests {
         assert_eq!(
             restored.font_size, original.font_size,
             "default font_size should survive round-trip"
+        );
+    }
+
+    #[test]
+    fn test_editor_settings_missing_ai_fields_use_defaults() {
+        let json = r#"{"theme": "Adwaita-dark", "font_size": 15}"#;
+        let settings: EditorSettings =
+            serde_json::from_str(json).expect("should handle missing AI fields");
+
+        assert!(!settings.ai_enabled, "ai_enabled should default to false");
+        assert_eq!(
+            settings.ai_endpoint_url, "http://localhost:8080/v1/completions",
+            "ai_endpoint_url should have default value"
+        );
+        assert!(
+            settings.ai_api_key.is_empty(),
+            "ai_api_key should default to empty"
+        );
+        assert!(
+            settings.ai_model.is_empty(),
+            "ai_model should default to empty"
+        );
+        assert_eq!(
+            settings.ai_debounce_ms, 500,
+            "ai_debounce_ms should default to 500"
+        );
+        assert_eq!(
+            settings.ai_max_tokens, 128,
+            "ai_max_tokens should default to 128"
+        );
+        assert_eq!(
+            settings.ai_trigger_mode, "automatic",
+            "ai_trigger_mode should default to automatic"
         );
     }
 

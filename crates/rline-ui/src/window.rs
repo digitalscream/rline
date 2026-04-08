@@ -597,6 +597,20 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.trigger-completion (Ctrl+Space)
+        let action_trigger_completion = gio::ActionEntry::builder("trigger-completion")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.trigger_completion();
+                    }
+                }
+            ))
+            .build();
+
         self.add_action_entries([
             action_open,
             action_save,
@@ -612,6 +626,7 @@ impl RlineWindow {
             action_find,
             action_find_replace,
             action_split,
+            action_trigger_completion,
         ]);
     }
 

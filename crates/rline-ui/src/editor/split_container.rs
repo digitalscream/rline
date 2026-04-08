@@ -186,8 +186,18 @@ impl SplitContainer {
         self.get_active_pane().show_find_bar(with_replace);
     }
 
+    /// Trigger an AI inline completion on the active pane's current tab.
+    pub fn trigger_completion(&self) {
+        self.get_active_pane().trigger_completion();
+    }
+
     /// Apply settings to all panes.
     pub fn apply_settings(&self, settings: &EditorSettings) {
+        tracing::info!(
+            "SplitContainer::apply_settings: ai_enabled={}, model='{}'",
+            settings.ai_enabled,
+            settings.ai_model,
+        );
         self.settings.replace(settings.clone());
         let state = self.state.borrow();
         match &*state {

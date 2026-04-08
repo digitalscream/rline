@@ -1,4 +1,4 @@
-//! Settings dialog — theme, fonts, and behavior configuration.
+//! Settings dialog — theme, fonts, behavior, and AI completion configuration.
 
 use std::rc::Rc;
 
@@ -27,16 +27,145 @@ impl SettingsDialog {
             .modal(true)
             .transient_for(parent)
             .default_width(450)
-            .default_height(580)
+            .default_height(620)
             .build();
 
+        // ── Notebook with two pages ──
+        let notebook = gtk4::Notebook::new();
+        notebook.set_vexpand(true);
+
+        // ════════════════════════════════════════════════════════════
+        //  Tab 1 — Editor
+        // ════════════════════════════════════════════════════════════
+        let editor_page = Self::build_editor_page(&settings, &window);
+
+        // ════════════════════════════════════════════════════════════
+        //  Tab 2 — Completion
+        // ════════════════════════════════════════════════════════════
+        let completion_page = Self::build_completion_page(&settings);
+
+        notebook.append_page(
+            &editor_page.scrolled,
+            Some(&gtk4::Label::new(Some("Editor"))),
+        );
+        notebook.append_page(
+            &completion_page.scrolled,
+            Some(&gtk4::Label::new(Some("Completion"))),
+        );
+
+        // ── Buttons ──
+        let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        button_box.set_halign(gtk4::Align::End);
+        button_box.set_margin_top(8);
+        button_box.set_margin_bottom(8);
+        button_box.set_margin_end(16);
+        let cancel_btn = gtk4::Button::with_label("Cancel");
+        let apply_btn = gtk4::Button::with_label("Apply");
+        let ok_btn = gtk4::Button::with_label("OK");
+        ok_btn.add_css_class("suggested-action");
+        button_box.append(&cancel_btn);
+        button_box.append(&apply_btn);
+        button_box.append(&ok_btn);
+
+        let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        outer.append(&notebook);
+        outer.append(&button_box);
+        window.set_child(Some(&outer));
+
+        // Wire cancel
+        cancel_btn.connect_clicked(glib::clone!(
+            #[weak]
+            window,
+            move |_| {
+                window.close();
+            }
+        ));
+
+        // Shared apply logic
+        let on_apply = Rc::new(on_apply);
+
+        let do_apply = {
+            let ep = editor_page.clone();
+            let cp = completion_page.clone();
+            let on_apply = on_apply.clone();
+            Rc::new(move || {
+                tracing::info!(
+                    "do_apply: switch.is_active={}, switch.state={}",
+                    cp.enabled_switch.is_active(),
+                    cp.enabled_switch.state(),
+                );
+                let existing = EditorSettings::load().unwrap_or_default();
+                let new_settings = EditorSettings {
+                    // Editor page
+                    theme: ep.read_theme(),
+                    editor_font_family: ep.read_editor_font(),
+                    font_size: ep.font_spin.value() as u32,
+                    letter_spacing: ep.letter_spacing_spin.value(),
+                    line_height: ep.line_height_spin.value(),
+                    hint_style: ep.read_hint_style(),
+                    tab_width: ep.tab_width_spin.value() as u32,
+                    insert_spaces: ep.insert_spaces_switch.is_active(),
+                    terminal_font_family: ep.read_terminal_font(),
+                    terminal_font_size: ep.term_font_spin.value() as u32,
+                    open_last_project: ep.last_project_switch.is_active(),
+                    last_project_path: existing.last_project_path,
+                    search_auto_expand_threshold: ep.expand_spin.value() as u32,
+                    tab_cycle_depth: ep.cycle_spin.value() as u32,
+                    use_treesitter: ep.treesitter_switch.is_active(),
+                    // Completion page
+                    ai_enabled: cp.enabled_switch.is_active(),
+                    ai_endpoint_url: cp.endpoint_entry.text().to_string(),
+                    ai_api_key: cp.api_key_entry.text().to_string(),
+                    ai_model: cp.model_entry.text().to_string(),
+                    ai_trigger_mode: cp.read_trigger_mode(),
+                    ai_debounce_ms: cp.debounce_spin.value() as u32,
+                    ai_max_tokens: cp.max_tokens_spin.value() as u32,
+                    ai_context_lines_before: cp.context_before_spin.value() as u32,
+                    ai_context_lines_after: cp.context_after_spin.value() as u32,
+                    ai_max_lines: cp.max_lines_spin.value() as u32,
+                    ai_temperature: cp.temperature_spin.value(),
+                    ..existing
+                };
+
+                if let Err(e) = new_settings.save() {
+                    tracing::error!("failed to save settings: {e}");
+                }
+                on_apply(new_settings);
+            })
+        };
+
+        let do_apply_for_apply = do_apply.clone();
+        apply_btn.connect_clicked(move |_| {
+            do_apply_for_apply();
+        });
+
+        ok_btn.connect_clicked(glib::clone!(
+            #[weak]
+            window,
+            move |_| {
+                do_apply();
+                window.close();
+            }
+        ));
+
+        Self { window }
+    }
+
+    /// Present the dialog.
+    pub fn present(&self) {
+        self.window.present();
+    }
+
+    // ── Editor page ───────────────────────────────────────────────
+
+    fn build_editor_page(settings: &EditorSettings, window: &gtk4::Window) -> EditorPageWidgets {
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
         content.set_margin_top(16);
         content.set_margin_bottom(16);
         content.set_margin_start(16);
         content.set_margin_end(16);
 
-        // ── Theme selector ──
+        // Theme selector
         let theme_row = Self::make_row("Theme");
         let scheme_manager = sourceview5::StyleSchemeManager::default();
         let scheme_ids = scheme_manager.scheme_ids();
@@ -47,7 +176,7 @@ impl SettingsDialog {
         }
         theme_row.append(&theme_dropdown);
 
-        // ── Import VS Code theme ──
+        // Import VS Code theme
         let import_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
         import_row.set_halign(gtk4::Align::End);
         let import_btn = gtk4::Button::with_label("Import VS Code Theme...");
@@ -63,11 +192,11 @@ impl SettingsDialog {
             }
         ));
 
-        // ── Enumerate monospace fonts ──
+        // Monospace fonts
         let mono_fonts = Self::list_monospace_fonts();
         let mono_strs: Vec<&str> = mono_fonts.iter().map(|s| s.as_str()).collect();
 
-        // ── Editor font family ──
+        // Editor font family
         let editor_font_row = Self::make_row("Editor Font");
         let editor_font_dropdown = gtk4::DropDown::from_strings(&mono_strs);
         if let Some(pos) = mono_fonts
@@ -78,26 +207,26 @@ impl SettingsDialog {
         }
         editor_font_row.append(&editor_font_dropdown);
 
-        // ── Editor font size ──
+        // Editor font size
         let font_row = Self::make_row("Editor Font Size");
         let font_spin = gtk4::SpinButton::with_range(5.0, 72.0, 1.0);
         font_spin.set_value(settings.font_size as f64);
         font_row.append(&font_spin);
 
-        // ── Tab width ──
+        // Tab width
         let tab_width_row = Self::make_row("Tab Width");
         let tab_width_spin = gtk4::SpinButton::with_range(1.0, 16.0, 1.0);
         tab_width_spin.set_value(settings.tab_width as f64);
         tab_width_row.append(&tab_width_spin);
 
-        // ── Insert spaces instead of tabs ──
+        // Insert spaces
         let insert_spaces_row = Self::make_row("Insert Spaces");
         let insert_spaces_switch = gtk4::Switch::new();
         insert_spaces_switch.set_active(settings.insert_spaces);
         insert_spaces_switch.set_valign(gtk4::Align::Center);
         insert_spaces_row.append(&insert_spaces_switch);
 
-        // ── Terminal font family ──
+        // Terminal font family
         let term_font_fam_row = Self::make_row("Terminal Font");
         let term_font_dropdown = gtk4::DropDown::from_strings(&mono_strs);
         if let Some(pos) = mono_fonts
@@ -108,46 +237,46 @@ impl SettingsDialog {
         }
         term_font_fam_row.append(&term_font_dropdown);
 
-        // ── Terminal font size ──
+        // Terminal font size
         let term_font_row = Self::make_row("Terminal Font Size");
         let term_font_spin = gtk4::SpinButton::with_range(5.0, 72.0, 1.0);
         term_font_spin.set_value(settings.terminal_font_size as f64);
         term_font_row.append(&term_font_spin);
 
-        // ── Open last project on startup ──
+        // Open last project on startup
         let last_project_row = Self::make_row("Open Last Project on Startup");
         let last_project_switch = gtk4::Switch::new();
         last_project_switch.set_active(settings.open_last_project);
         last_project_switch.set_valign(gtk4::Align::Center);
         last_project_row.append(&last_project_switch);
 
-        // ── Search auto-expand threshold ──
+        // Search auto-expand threshold
         let expand_row = Self::make_row("Auto-expand Search (max results)");
         let expand_spin = gtk4::SpinButton::with_range(0.0, 100.0, 1.0);
         expand_spin.set_value(settings.search_auto_expand_threshold as f64);
         expand_row.append(&expand_spin);
 
-        // ── Tab cycle depth ──
+        // Tab cycle depth
         let cycle_row = Self::make_row("Ctrl+Tab Cycle Depth");
         let cycle_spin = gtk4::SpinButton::with_range(2.0, 50.0, 1.0);
         cycle_spin.set_value(settings.tab_cycle_depth as f64);
         cycle_row.append(&cycle_spin);
 
-        // ── Letter spacing ──
+        // Letter spacing
         let letter_spacing_row = Self::make_row("Letter Spacing (px)");
         let letter_spacing_spin = gtk4::SpinButton::with_range(0.0, 5.0, 0.1);
         letter_spacing_spin.set_digits(1);
         letter_spacing_spin.set_value(settings.letter_spacing);
         letter_spacing_row.append(&letter_spacing_spin);
 
-        // ── Line height ──
+        // Line height
         let line_height_row = Self::make_row("Line Height");
         let line_height_spin = gtk4::SpinButton::with_range(1.0, 3.0, 0.1);
         line_height_spin.set_digits(1);
         line_height_spin.set_value(settings.line_height);
         line_height_row.append(&line_height_spin);
 
-        // ── Hint level ──
+        // Hint level
         let hint_row = Self::make_row("Font Hinting");
         let hint_dropdown = gtk4::DropDown::from_strings(&["full", "slight"]);
         let hint_idx = if settings.hint_style == "slight" {
@@ -158,24 +287,12 @@ impl SettingsDialog {
         hint_dropdown.set_selected(hint_idx);
         hint_row.append(&hint_dropdown);
 
-        // ── Tree-sitter highlighting ──
+        // Tree-sitter highlighting
         let treesitter_row = Self::make_row("Tree-sitter Highlighting");
         let treesitter_switch = gtk4::Switch::new();
         treesitter_switch.set_active(settings.use_treesitter);
         treesitter_switch.set_valign(gtk4::Align::Center);
         treesitter_row.append(&treesitter_switch);
-
-        // ── Buttons ──
-        let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-        button_box.set_halign(gtk4::Align::End);
-        button_box.set_margin_top(16);
-        let cancel_btn = gtk4::Button::with_label("Cancel");
-        let apply_btn = gtk4::Button::with_label("Apply");
-        let ok_btn = gtk4::Button::with_label("OK");
-        ok_btn.add_css_class("suggested-action");
-        button_box.append(&cancel_btn);
-        button_box.append(&apply_btn);
-        button_box.append(&ok_btn);
 
         content.append(&theme_row);
         content.append(&import_row);
@@ -192,206 +309,158 @@ impl SettingsDialog {
         content.append(&expand_row);
         content.append(&cycle_row);
         content.append(&treesitter_row);
-        content.append(&button_box);
 
-        window.set_child(Some(&content));
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .child(&content)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
 
-        // Wire cancel
-        cancel_btn.connect_clicked(glib::clone!(
-            #[weak]
-            window,
-            move |_| {
-                window.close();
-            }
-        ));
+        EditorPageWidgets {
+            scrolled,
+            theme_dropdown,
+            editor_font_dropdown,
+            mono_fonts,
+            font_spin,
+            letter_spacing_spin,
+            line_height_spin,
+            hint_dropdown,
+            tab_width_spin,
+            insert_spaces_switch,
+            term_font_dropdown,
+            term_font_spin,
+            last_project_switch,
+            expand_spin,
+            cycle_spin,
+            treesitter_switch,
+        }
+    }
 
-        // Shared apply logic wrapped in Rc so both Apply and OK can call it
-        let mono_fonts_owned = mono_fonts.clone();
-        let on_apply = Rc::new(on_apply);
+    // ── Completion page ───────────────────────────────────────────
 
-        // Wire Apply (apply changes, keep dialog open)
-        let do_apply = {
-            let mono_fonts = mono_fonts_owned.clone();
-            let on_apply = on_apply.clone();
-            Rc::new(
-                move |theme_dropdown: &gtk4::DropDown,
-                      editor_font_dropdown: &gtk4::DropDown,
-                      font_spin: &gtk4::SpinButton,
-                      letter_spacing_spin: &gtk4::SpinButton,
-                      line_height_spin: &gtk4::SpinButton,
-                      hint_dropdown: &gtk4::DropDown,
-                      tab_width_spin: &gtk4::SpinButton,
-                      insert_spaces_switch: &gtk4::Switch,
-                      term_font_dropdown: &gtk4::DropDown,
-                      term_font_spin: &gtk4::SpinButton,
-                      last_project_switch: &gtk4::Switch,
-                      expand_spin: &gtk4::SpinButton,
-                      cycle_spin: &gtk4::SpinButton,
-                      treesitter_switch: &gtk4::Switch| {
-                    // Read selected theme from the dropdown's model (handles dynamically added items)
-                    let theme = theme_dropdown
-                        .selected_item()
-                        .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
-                        .map(|so| so.string().to_string())
-                        .unwrap_or_else(|| "Adwaita-dark".to_owned());
+    fn build_completion_page(settings: &EditorSettings) -> CompletionPageWidgets {
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_top(16);
+        content.set_margin_bottom(16);
+        content.set_margin_start(16);
+        content.set_margin_end(16);
 
-                    let editor_font_idx = editor_font_dropdown.selected() as usize;
-                    let editor_font = mono_fonts
-                        .get(editor_font_idx)
-                        .cloned()
-                        .unwrap_or_else(|| "Monospace".to_owned());
+        // Enable AI Completion
+        let enabled_row = Self::make_row("Enable AI Completion");
+        let enabled_switch = gtk4::Switch::new();
+        enabled_switch.set_active(settings.ai_enabled);
+        enabled_switch.set_valign(gtk4::Align::Center);
+        enabled_row.append(&enabled_switch);
 
-                    let term_font_idx = term_font_dropdown.selected() as usize;
-                    let terminal_font = mono_fonts
-                        .get(term_font_idx)
-                        .cloned()
-                        .unwrap_or_else(|| "Monospace".to_owned());
+        // Endpoint URL
+        let endpoint_row = Self::make_row("Endpoint URL");
+        let endpoint_entry = gtk4::Entry::builder()
+            .text(&settings.ai_endpoint_url)
+            .hexpand(true)
+            .build();
+        endpoint_row.append(&endpoint_entry);
 
-                    let hint_style = hint_dropdown
-                        .selected_item()
-                        .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
-                        .map(|so| so.string().to_string())
-                        .unwrap_or_else(|| "full".to_owned());
+        // API Key
+        let api_key_row = Self::make_row("API Key");
+        let api_key_entry = gtk4::PasswordEntry::builder()
+            .show_peek_icon(true)
+            .hexpand(true)
+            .build();
+        api_key_entry.set_text(&settings.ai_api_key);
+        api_key_row.append(&api_key_entry);
 
-                    let existing = EditorSettings::load().unwrap_or_default();
-                    let new_settings = EditorSettings {
-                        theme,
-                        editor_font_family: editor_font,
-                        font_size: font_spin.value() as u32,
-                        letter_spacing: letter_spacing_spin.value(),
-                        line_height: line_height_spin.value(),
-                        hint_style,
-                        tab_width: tab_width_spin.value() as u32,
-                        insert_spaces: insert_spaces_switch.is_active(),
-                        terminal_font_family: terminal_font,
-                        terminal_font_size: term_font_spin.value() as u32,
-                        open_last_project: last_project_switch.is_active(),
-                        last_project_path: existing.last_project_path,
-                        search_auto_expand_threshold: expand_spin.value() as u32,
-                        tab_cycle_depth: cycle_spin.value() as u32,
-                        use_treesitter: treesitter_switch.is_active(),
-                        ..existing
-                    };
+        // Model
+        let model_row = Self::make_row("Model");
+        let model_entry = gtk4::Entry::builder()
+            .text(&settings.ai_model)
+            .placeholder_text("e.g. codellama, deepseek-coder")
+            .hexpand(true)
+            .build();
+        model_row.append(&model_entry);
 
-                    if let Err(e) = new_settings.save() {
-                        tracing::error!("failed to save settings: {e}");
-                    }
-
-                    on_apply(new_settings);
-                },
-            )
+        // Trigger Mode
+        let trigger_row = Self::make_row("Trigger Mode");
+        let trigger_dropdown = gtk4::DropDown::from_strings(&["Automatic", "Manual", "Both"]);
+        let trigger_idx = match settings.ai_trigger_mode.as_str() {
+            "manual" => 1,
+            "both" => 2,
+            _ => 0, // "automatic"
         };
+        trigger_dropdown.set_selected(trigger_idx);
+        trigger_row.append(&trigger_dropdown);
 
-        let do_apply_for_apply = do_apply.clone();
-        apply_btn.connect_clicked(glib::clone!(
-            #[weak]
-            theme_dropdown,
-            #[weak]
-            editor_font_dropdown,
-            #[weak]
-            font_spin,
-            #[weak]
-            letter_spacing_spin,
-            #[weak]
-            line_height_spin,
-            #[weak]
-            hint_dropdown,
-            #[weak]
-            tab_width_spin,
-            #[weak]
-            insert_spaces_switch,
-            #[weak]
-            term_font_dropdown,
-            #[weak]
-            term_font_spin,
-            #[weak]
-            last_project_switch,
-            #[weak]
-            expand_spin,
-            #[weak]
-            cycle_spin,
-            #[weak]
-            treesitter_switch,
-            move |_| {
-                do_apply_for_apply(
-                    &theme_dropdown,
-                    &editor_font_dropdown,
-                    &font_spin,
-                    &letter_spacing_spin,
-                    &line_height_spin,
-                    &hint_dropdown,
-                    &tab_width_spin,
-                    &insert_spaces_switch,
-                    &term_font_dropdown,
-                    &term_font_spin,
-                    &last_project_switch,
-                    &expand_spin,
-                    &cycle_spin,
-                    &treesitter_switch,
-                );
-            }
-        ));
+        // Debounce (ms)
+        let debounce_row = Self::make_row("Debounce (ms)");
+        let debounce_spin = gtk4::SpinButton::with_range(50.0, 2000.0, 50.0);
+        debounce_spin.set_value(settings.ai_debounce_ms as f64);
+        debounce_row.append(&debounce_spin);
 
-        // Wire OK (apply changes + close dialog)
-        ok_btn.connect_clicked(glib::clone!(
-            #[weak]
-            window,
-            #[weak]
-            theme_dropdown,
-            #[weak]
-            editor_font_dropdown,
-            #[weak]
-            font_spin,
-            #[weak]
-            letter_spacing_spin,
-            #[weak]
-            line_height_spin,
-            #[weak]
-            hint_dropdown,
-            #[weak]
-            tab_width_spin,
-            #[weak]
-            insert_spaces_switch,
-            #[weak]
-            term_font_dropdown,
-            #[weak]
-            term_font_spin,
-            #[weak]
-            last_project_switch,
-            #[weak]
-            expand_spin,
-            #[weak]
-            cycle_spin,
-            #[weak]
-            treesitter_switch,
-            move |_| {
-                do_apply(
-                    &theme_dropdown,
-                    &editor_font_dropdown,
-                    &font_spin,
-                    &letter_spacing_spin,
-                    &line_height_spin,
-                    &hint_dropdown,
-                    &tab_width_spin,
-                    &insert_spaces_switch,
-                    &term_font_dropdown,
-                    &term_font_spin,
-                    &last_project_switch,
-                    &expand_spin,
-                    &cycle_spin,
-                    &treesitter_switch,
-                );
-                window.close();
-            }
-        ));
+        // Max Tokens
+        let max_tokens_row = Self::make_row("Max Tokens");
+        let max_tokens_spin = gtk4::SpinButton::with_range(16.0, 1024.0, 16.0);
+        max_tokens_spin.set_value(settings.ai_max_tokens as f64);
+        max_tokens_row.append(&max_tokens_spin);
 
-        Self { window }
+        // Context Lines Before
+        let context_before_row = Self::make_row("Context Lines Before");
+        let context_before_spin = gtk4::SpinButton::with_range(32.0, 512.0, 32.0);
+        context_before_spin.set_value(settings.ai_context_lines_before as f64);
+        context_before_row.append(&context_before_spin);
+
+        // Context Lines After
+        let context_after_row = Self::make_row("Context Lines After");
+        let context_after_spin = gtk4::SpinButton::with_range(16.0, 256.0, 16.0);
+        context_after_spin.set_value(settings.ai_context_lines_after as f64);
+        context_after_row.append(&context_after_spin);
+
+        // Max Lines (0 = unlimited)
+        let max_lines_row = Self::make_row("Max Lines (0 = unlimited)");
+        let max_lines_spin = gtk4::SpinButton::with_range(0.0, 100.0, 1.0);
+        max_lines_spin.set_value(settings.ai_max_lines as f64);
+        max_lines_row.append(&max_lines_spin);
+
+        // Temperature
+        let temperature_row = Self::make_row("Temperature");
+        let temperature_spin = gtk4::SpinButton::with_range(0.0, 2.0, 0.1);
+        temperature_spin.set_digits(1);
+        temperature_spin.set_value(settings.ai_temperature);
+        temperature_row.append(&temperature_spin);
+
+        content.append(&enabled_row);
+        content.append(&endpoint_row);
+        content.append(&api_key_row);
+        content.append(&model_row);
+        content.append(&trigger_row);
+        content.append(&debounce_row);
+        content.append(&max_tokens_row);
+        content.append(&context_before_row);
+        content.append(&context_after_row);
+        content.append(&max_lines_row);
+        content.append(&temperature_row);
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .child(&content)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        CompletionPageWidgets {
+            scrolled,
+            enabled_switch,
+            endpoint_entry,
+            api_key_entry,
+            model_entry,
+            trigger_dropdown,
+            debounce_spin,
+            max_tokens_spin,
+            context_before_spin,
+            context_after_spin,
+            max_lines_spin,
+            temperature_spin,
+        }
     }
 
-    /// Present the dialog.
-    pub fn present(&self) {
-        self.window.present();
-    }
+    // ── Helpers ───────────────────────────────────────────────────
 
     /// Helper to create a settings row with a left-aligned label.
     fn make_row(label_text: &str) -> gtk4::Box {
@@ -598,5 +667,89 @@ impl SettingsDialog {
         }
 
         mono_names
+    }
+}
+
+// ── Widget holders for each notebook page ─────────────────────────
+
+/// Holds references to editor-page widgets for reading values at apply time.
+#[derive(Clone)]
+struct EditorPageWidgets {
+    scrolled: gtk4::ScrolledWindow,
+    theme_dropdown: gtk4::DropDown,
+    editor_font_dropdown: gtk4::DropDown,
+    mono_fonts: Vec<String>,
+    font_spin: gtk4::SpinButton,
+    letter_spacing_spin: gtk4::SpinButton,
+    line_height_spin: gtk4::SpinButton,
+    hint_dropdown: gtk4::DropDown,
+    tab_width_spin: gtk4::SpinButton,
+    insert_spaces_switch: gtk4::Switch,
+    term_font_dropdown: gtk4::DropDown,
+    term_font_spin: gtk4::SpinButton,
+    last_project_switch: gtk4::Switch,
+    expand_spin: gtk4::SpinButton,
+    cycle_spin: gtk4::SpinButton,
+    treesitter_switch: gtk4::Switch,
+}
+
+impl EditorPageWidgets {
+    fn read_theme(&self) -> String {
+        self.theme_dropdown
+            .selected_item()
+            .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
+            .map(|so| so.string().to_string())
+            .unwrap_or_else(|| "Adwaita-dark".to_owned())
+    }
+
+    fn read_editor_font(&self) -> String {
+        let idx = self.editor_font_dropdown.selected() as usize;
+        self.mono_fonts
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| "Monospace".to_owned())
+    }
+
+    fn read_terminal_font(&self) -> String {
+        let idx = self.term_font_dropdown.selected() as usize;
+        self.mono_fonts
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| "Monospace".to_owned())
+    }
+
+    fn read_hint_style(&self) -> String {
+        self.hint_dropdown
+            .selected_item()
+            .and_then(|obj| obj.downcast::<gtk4::StringObject>().ok())
+            .map(|so| so.string().to_string())
+            .unwrap_or_else(|| "full".to_owned())
+    }
+}
+
+/// Holds references to completion-page widgets for reading values at apply time.
+#[derive(Clone)]
+struct CompletionPageWidgets {
+    scrolled: gtk4::ScrolledWindow,
+    enabled_switch: gtk4::Switch,
+    endpoint_entry: gtk4::Entry,
+    api_key_entry: gtk4::PasswordEntry,
+    model_entry: gtk4::Entry,
+    trigger_dropdown: gtk4::DropDown,
+    debounce_spin: gtk4::SpinButton,
+    max_tokens_spin: gtk4::SpinButton,
+    context_before_spin: gtk4::SpinButton,
+    context_after_spin: gtk4::SpinButton,
+    max_lines_spin: gtk4::SpinButton,
+    temperature_spin: gtk4::SpinButton,
+}
+
+impl CompletionPageWidgets {
+    fn read_trigger_mode(&self) -> String {
+        match self.trigger_dropdown.selected() {
+            1 => "manual".to_owned(),
+            2 => "both".to_owned(),
+            _ => "automatic".to_owned(),
+        }
     }
 }

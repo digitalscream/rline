@@ -16,4 +16,5 @@ pub fn register_accels(app: &gtk4::Application) {
     app.set_accels_for_action("win.find", &["<Ctrl>F"]);
     app.set_accels_for_action("win.find-replace", &["<Ctrl>H"]);
     app.set_accels_for_action("win.split-editor", &["<Ctrl>backslash"]);
+    app.set_accels_for_action("win.trigger-completion", &["<Ctrl>space"]);
 }

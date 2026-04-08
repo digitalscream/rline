@@ -437,6 +437,16 @@ impl EditorPane {
         }
     }
 
+    /// Trigger an AI inline completion on the current editor tab.
+    pub fn trigger_completion(&self) {
+        if let Some(page) = self.notebook.current_page() {
+            let tabs = self.tabs.borrow();
+            if let Some(TabKind::Editor(tab)) = tabs.get(page as usize) {
+                tab.trigger_completion();
+            }
+        }
+    }
+
     /// The number of open tabs in this pane.
     pub fn tab_count(&self) -> usize {
         self.tabs.borrow().len()
