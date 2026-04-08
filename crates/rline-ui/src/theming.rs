@@ -11,10 +11,6 @@ pub struct TerminalColors {
     pub background: gtk4::gdk::RGBA,
     /// Terminal foreground (text) color.
     pub foreground: gtk4::gdk::RGBA,
-    /// Cursor background color.
-    pub cursor: gtk4::gdk::RGBA,
-    /// Cursor foreground (text under cursor) color.
-    pub cursor_foreground: gtk4::gdk::RGBA,
     /// Selection highlight background color.
     pub highlight: gtk4::gdk::RGBA,
     /// Selection highlight foreground color.
@@ -71,9 +67,6 @@ pub fn terminal_colors_for_scheme(scheme_id: &str) -> Option<TerminalColors> {
             .unwrap_or_else(|| if is_dark { "#e0e0e0" } else { "#1e1e1e" }.into())
     });
 
-    let cursor_hex = ui("terminalCursor.background").unwrap_or_else(|| terminal_fg.clone());
-    let cursor_fg_hex = ui("terminalCursor.foreground").unwrap_or_else(|| terminal_bg.clone());
-
     let highlight_hex = ui("terminal.selectionBackground").unwrap_or_else(|| {
         if is_dark {
             "#264f78".into()
@@ -99,8 +92,6 @@ pub fn terminal_colors_for_scheme(scheme_id: &str) -> Option<TerminalColors> {
     Some(TerminalColors {
         background: parse(&terminal_bg),
         foreground: parse(&terminal_fg),
-        cursor: parse(&cursor_hex),
-        cursor_foreground: parse(&cursor_fg_hex),
         highlight: parse(&highlight_hex),
         highlight_foreground: parse(&highlight_fg_hex),
         bold: parse(&bold_hex),

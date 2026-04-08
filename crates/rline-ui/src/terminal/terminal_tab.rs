@@ -26,6 +26,8 @@ impl TerminalTab {
         let terminal = vte4::Terminal::new();
         terminal.set_vexpand(true);
         terminal.set_hexpand(true);
+        terminal.set_cursor_shape(vte4::CursorShape::Block);
+        terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::Off);
 
         // Apply font
         Self::apply_font(&terminal, font_family, font_size);
@@ -100,8 +102,10 @@ impl TerminalTab {
     pub fn apply_theme_to_terminal(terminal: &vte4::Terminal, colors: &TerminalColors) {
         terminal.set_color_background(&colors.background);
         terminal.set_color_foreground(&colors.foreground);
-        terminal.set_color_cursor(Some(&colors.cursor));
-        terminal.set_color_cursor_foreground(Some(&colors.cursor_foreground));
+        // Reset cursor colors to None so VTE uses its default inverted fg/bg,
+        // which guarantees the cursor is always visible.
+        terminal.set_color_cursor(None::<&gtk4::gdk::RGBA>);
+        terminal.set_color_cursor_foreground(None::<&gtk4::gdk::RGBA>);
         terminal.set_color_highlight(Some(&colors.highlight));
         terminal.set_color_highlight_foreground(Some(&colors.highlight_foreground));
         terminal.set_color_bold(Some(&colors.bold));
