@@ -204,6 +204,19 @@ impl SplitContainer {
         self.get_active_pane().current_editor_tab()
     }
 
+    /// All open editor buffers across all panes, with file paths and modified state.
+    pub fn open_buffers(&self) -> Vec<(PathBuf, bool)> {
+        let state = self.state.borrow();
+        match &*state {
+            SplitState::Single { pane } => pane.open_buffers(),
+            SplitState::Split { left, right, .. } => {
+                let mut buffers = left.open_buffers();
+                buffers.extend(right.open_buffers());
+                buffers
+            }
+        }
+    }
+
     /// Register a callback invoked whenever the active editor file changes
     /// (tab switch or pane focus change in split mode).
     pub fn set_on_active_file_changed<F: Fn(Option<PathBuf>) + 'static>(&self, f: F) {

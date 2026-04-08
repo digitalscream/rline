@@ -705,6 +705,25 @@ impl GitPanel {
         self.project_root.borrow().clone()
     }
 
+    /// Build a map of relative file paths to their lowercase status letter
+    /// from the cached status result.
+    ///
+    /// Combines both staged and unstaged files, preferring unstaged status
+    /// when a file appears in both.
+    pub fn file_status_map(&self) -> std::collections::HashMap<PathBuf, String> {
+        let mut map = std::collections::HashMap::new();
+        if let Some(ref status) = *self.cached_status.borrow() {
+            for entry in &status.staged {
+                map.insert(entry.path.clone(), entry.status.label().to_lowercase());
+            }
+            // Unstaged overrides staged
+            for entry in &status.unstaged {
+                map.insert(entry.path.clone(), entry.status.label().to_lowercase());
+            }
+        }
+        map
+    }
+
     /// Set the callback for opening a diff view.
     pub fn set_on_open_diff<F: Fn(&Path, bool) + 'static>(&self, f: F) {
         self.on_open_diff.replace(Some(Box::new(f)));

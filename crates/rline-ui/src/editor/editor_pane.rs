@@ -476,6 +476,20 @@ impl EditorPane {
             .collect()
     }
 
+    /// All open editor buffers with their file paths and modified state.
+    ///
+    /// Returns `(file_path, is_modified)` for each editor tab (not diff tabs).
+    pub fn open_buffers(&self) -> Vec<(PathBuf, bool)> {
+        self.tabs
+            .borrow()
+            .iter()
+            .filter_map(|t| match t {
+                TabKind::Editor(tab) => tab.file_path().map(|p| (p, tab.is_modified())),
+                TabKind::Diff(_) => None,
+            })
+            .collect()
+    }
+
     /// The notebook page index of the currently focused tab, if any.
     pub fn active_tab_index(&self) -> Option<u32> {
         self.notebook.current_page()

@@ -465,19 +465,43 @@ pub fn apply_app_theme(scheme_id: &str) {
         .to_string()
     };
 
+    // Git status colors — try VS Code theme colors first, fall back to defaults.
+    let git_modified_color = syntax_theme
+        .as_ref()
+        .and_then(|t| t.ui_color("gitDecoration.modifiedResourceForeground"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "#e2c08d".to_string());
+    let git_added_color = syntax_theme
+        .as_ref()
+        .and_then(|t| t.ui_color("gitDecoration.untrackedResourceForeground"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "#73c991".to_string());
+    let git_deleted_color = syntax_theme
+        .as_ref()
+        .and_then(|t| t.ui_color("gitDecoration.deletedResourceForeground"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "#c74e39".to_string());
+    let git_renamed_color = "#73b8e2";
+
     // Append git status badge colors and compact list row spacing.
-    let git_css = r#"
-        .git-status-m { color: #e2c08d; }
-        .git-status-a { color: #73c991; }
-        .git-status-d { color: #c74e39; }
-        .git-status-r { color: #73b8e2; }
-        .git-status-c { color: #e06c75; }
-        listview.compact-list > row { padding: 0; min-height: 0; }
-        listview.compact-list > row > cell { padding: 0; margin: 0; min-height: 0; }
-        listview.compact-list button.circular { min-height: 16px; min-width: 16px; padding: 0; margin: 0; }
-        textview.commit-input { border-radius: 6px; }
-        textview.commit-input text { background: transparent; }
-    "#;
+    let git_css = format!(
+        r#"
+        .git-status-m {{ color: {git_modified_color}; }}
+        .git-status-a {{ color: {git_added_color}; }}
+        .git-status-d {{ color: {git_deleted_color}; }}
+        .git-status-r {{ color: {git_renamed_color}; }}
+        .git-status-c {{ color: #e06c75; }}
+        .file-git-modified {{ color: {git_modified_color}; }}
+        .file-git-added {{ color: {git_added_color}; }}
+        .file-git-deleted {{ color: {git_deleted_color}; }}
+        .file-git-renamed {{ color: {git_renamed_color}; }}
+        listview.compact-list > row {{ padding: 0; min-height: 0; }}
+        listview.compact-list > row > cell {{ padding: 0; margin: 0; min-height: 0; }}
+        listview.compact-list button.circular {{ min-height: 16px; min-width: 16px; padding: 0; margin: 0; }}
+        textview.commit-input {{ border-radius: 6px; }}
+        textview.commit-input text {{ background: transparent; }}
+    "#
+    );
     let full_css = format!("{css}\n{status_bar_css}\n{git_css}");
 
     let provider = gtk4::CssProvider::new();

@@ -227,8 +227,10 @@ impl RlineWindow {
         // Wire action buttons (needs the window reference for confirmation dialogs).
         git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
 
-        // Update the Git tab title with the change count after each refresh.
+        // Update the Git tab title and file browser git status after each refresh.
         let stack_for_count = stack.clone();
+        let fb_for_git = file_browser.clone();
+        let gp_for_git = git_panel.clone();
         git_panel.set_on_status_refreshed(move |count| {
             if let Some(child) = stack_for_count.child_by_name("git") {
                 let page = stack_for_count.page(&child);
@@ -238,6 +240,9 @@ impl RlineWindow {
                     page.set_title("Git");
                 }
             }
+            // Update file browser tree with git status colors
+            let status_map = gp_for_git.file_status_map();
+            fb_for_git.update_git_status(status_map);
         });
 
         // Auto-refresh git panel when the tab becomes visible.
@@ -308,24 +313,31 @@ impl RlineWindow {
         });
 
         // Reveal the active file in the browser when switching editor tabs,
-        // and update the status bar with the new buffer for blame tracking.
+        // update the status bar with the new buffer for blame tracking,
+        // and refresh the open buffers list.
         let fb = file_browser.clone();
+        let fb_for_buffers = file_browser.clone();
         let sb = status_bar.clone();
         let sc_for_status = split_container.clone();
+        let sc_for_buffers = split_container.clone();
         split_container.set_on_active_file_changed(move |path| {
             if let Some(ref p) = path {
                 fb.reveal_file(p);
             }
-            // Defer status bar update: during switch-page, current_page() still
-            // returns the OLD page, so current_editor_tab() would yield the wrong
-            // buffer. By the time the idle callback runs the switch is complete.
+            // Defer status bar and buffer list update: during switch-page,
+            // current_page() still returns the OLD page. By the time the
+            // idle callback runs the switch is complete.
             let sb_clone = sb.clone();
             let sc_clone = sc_for_status.clone();
+            let sc_buf_clone = sc_for_buffers.clone();
+            let fb_buf_clone = fb_for_buffers.clone();
             let path_clone = path.clone();
             glib::idle_add_local_once(move || {
                 let tab = sc_clone.current_editor_tab();
                 let buffer = tab.as_ref().map(|t| t.buffer().clone());
                 sb_clone.set_active_editor(buffer, path_clone);
+                // Refresh open buffers list
+                fb_buf_clone.update_open_buffers(&sc_buf_clone.open_buffers());
             });
         });
 
@@ -693,6 +705,7 @@ impl RlineWindow {
         }
 
         // Periodic timer for working-tree changes (every 2 seconds).
+        // Also refreshes the open buffers list to keep modified indicators current.
         let timer_id = glib::timeout_add_local(
             std::time::Duration::from_secs(2),
             glib::clone!(
@@ -702,6 +715,7 @@ impl RlineWindow {
                 glib::ControlFlow::Break,
                 move || {
                     window.refresh_git_panel();
+                    window.refresh_open_buffers();
                     glib::ControlFlow::Continue
                 }
             ),
@@ -734,6 +748,20 @@ impl RlineWindow {
     fn refresh_git_panel(&self) {
         if let Some(ref gp) = *self.imp().git_panel.borrow() {
             gp.refresh();
+        }
+    }
+
+    /// Refresh the open buffers list in the file browser panel.
+    fn refresh_open_buffers(&self) {
+        let imp = self.imp();
+        let buffers = imp
+            .split_container
+            .borrow()
+            .as_ref()
+            .map(|sc| sc.open_buffers())
+            .unwrap_or_default();
+        if let Some(ref fb) = *imp.file_browser.borrow() {
+            fb.update_open_buffers(&buffers);
         }
     }
 

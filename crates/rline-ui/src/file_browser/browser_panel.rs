@@ -1,6 +1,7 @@
 //! FileBrowserPanel — directory browser with tree view and context menu.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -8,6 +9,7 @@ use gtk4::prelude::*;
 
 use super::file_node::FileNode;
 use super::file_tree;
+use super::open_buffer_item::OpenBufferItem;
 
 /// The file browser panel with a browse button and directory tree.
 #[derive(Clone)]
@@ -21,6 +23,10 @@ pub struct FileBrowserPanel {
     #[allow(clippy::type_complexity)]
     on_project_root_changed: Rc<RefCell<Option<Box<dyn Fn(&Path)>>>>,
     project_root: Rc<RefCell<Option<PathBuf>>>,
+    /// Git status map: relative path → status letter ("m", "a", "d", "r", "c").
+    git_status: Rc<RefCell<HashMap<PathBuf, String>>>,
+    /// ListStore backing the open buffers list.
+    buffer_store: gio::ListStore,
 }
 
 impl std::fmt::Debug for FileBrowserPanel {
@@ -48,28 +54,80 @@ impl FileBrowserPanel {
         browse_btn.set_margin_end(4);
         container.append(&browse_btn);
 
-        // List view (starts empty)
+        // File tree list view (starts empty)
         let selection = gtk4::SingleSelection::new(None::<gtk4::TreeListModel>);
         let list_view =
             gtk4::ListView::new(Some(selection.clone()), None::<gtk4::SignalListItemFactory>);
         list_view.set_vexpand(true);
 
-        let scrolled = gtk4::ScrolledWindow::builder()
+        let tree_scrolled = gtk4::ScrolledWindow::builder()
             .child(&list_view)
             .vexpand(true)
             .build();
-        container.append(&scrolled);
+
+        // Open buffers list at the bottom
+        let buffer_store = gio::ListStore::new::<OpenBufferItem>();
+        let buffer_selection = gtk4::SingleSelection::new(Some(buffer_store.clone()));
+        buffer_selection.set_autoselect(false);
+        buffer_selection.set_can_unselect(true);
+        let buffer_list_view =
+            gtk4::ListView::new(Some(buffer_selection), None::<gtk4::SignalListItemFactory>);
+        buffer_list_view.add_css_class("compact-list");
+
+        let buffer_scrolled = gtk4::ScrolledWindow::builder()
+            .child(&buffer_list_view)
+            .vexpand(true)
+            .build();
+
+        // Section header for open buffers
+        let buffers_header = gtk4::Label::new(Some("OPEN EDITORS"));
+        buffers_header.set_halign(gtk4::Align::Start);
+        buffers_header.set_margin_start(8);
+        buffers_header.set_margin_top(4);
+        buffers_header.set_margin_bottom(2);
+        buffers_header.add_css_class("dim-label");
+
+        let buffers_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        buffers_box.append(&buffers_header);
+        buffers_box.append(&buffer_scrolled);
+
+        // Split: tree on top, open buffers on bottom
+        let paned = gtk4::Paned::new(gtk4::Orientation::Vertical);
+        paned.set_start_child(Some(&tree_scrolled));
+        paned.set_end_child(Some(&buffers_box));
+        paned.set_resize_start_child(true);
+        paned.set_resize_end_child(true);
+        paned.set_shrink_start_child(false);
+        paned.set_shrink_end_child(false);
+        paned.set_wide_handle(false);
+        paned.set_vexpand(true);
+        // Position the split at ~70% for the tree
+        paned.set_position(400);
+
+        container.append(&paned);
+
+        let git_status: Rc<RefCell<HashMap<PathBuf, String>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+
+        // Clippy type_complexity: one-off event handler, not worth a type alias.
+        #[allow(clippy::type_complexity)]
+        let on_open_file: Rc<RefCell<Option<Box<dyn Fn(&Path)>>>> = Rc::new(RefCell::new(None));
 
         let panel = Self {
             container,
             list_view: list_view.clone(),
-            on_open_file: Rc::new(RefCell::new(None)),
+            on_open_file: on_open_file.clone(),
             on_project_root_changed: Rc::new(RefCell::new(None)),
             project_root: Rc::new(RefCell::new(None)),
+            git_status: git_status.clone(),
+            buffer_store: buffer_store.clone(),
         };
 
-        // Setup the factory for rendering tree items
+        // Setup the factory for rendering tree items (with git status coloring)
         panel.setup_factory();
+
+        // Setup the factory for the open buffers list
+        Self::setup_buffer_factory(&buffer_list_view, &on_open_file);
 
         // Wire browse button
         let panel_clone = panel.clone();
@@ -139,6 +197,59 @@ impl FileBrowserPanel {
     /// The container widget.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
+    }
+
+    /// Update the open buffers list with the current set of open files.
+    ///
+    /// Each entry is `(file_path, is_modified)`.
+    pub fn update_open_buffers(&self, buffers: &[(PathBuf, bool)]) {
+        self.buffer_store.remove_all();
+        for (path, modified) in buffers {
+            let name = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Untitled".to_string());
+            let item = OpenBufferItem::new(&name, &path.display().to_string(), *modified);
+            self.buffer_store.append(&item);
+        }
+    }
+
+    /// Update the git status map used to color file names in the tree.
+    ///
+    /// Keys are paths relative to the project root, values are lowercase status
+    /// letters ("m", "a", "d", "r", "c").
+    pub fn update_git_status(&self, status: HashMap<PathBuf, String>) {
+        self.git_status.replace(status);
+        // Walk realized row widgets and update label CSS classes directly.
+        // This preserves expansion state — no model rebuild needed.
+        // New items that scroll into view will get correct classes from
+        // the bind callback which reads the shared git_status map.
+        self.apply_git_colors_to_visible();
+    }
+
+    /// Walk the realized children of the ListView and apply git status
+    /// CSS classes to file name labels based on the current status map.
+    fn apply_git_colors_to_visible(&self) {
+        let root = self.project_root.borrow().clone();
+        let Some(root_path) = root else { return };
+        let status_map = self.git_status.borrow();
+
+        // GTK4 ListView's observe_children() returns realized row widgets.
+        let children = self.list_view.observe_children();
+        let n = children.n_items();
+        for i in 0..n {
+            let Some(child) = children.item(i) else {
+                continue;
+            };
+            // Each realized child is a row widget. Walk down to find the
+            // TreeExpander → Box → Label, and the FileNode from the expander.
+            let Some(widget) = child.downcast_ref::<gtk4::Widget>() else {
+                continue;
+            };
+            if let Some((node, label)) = find_node_and_label_in_row(widget) {
+                apply_git_class_to_label(&label, &node, &root_path, &status_map);
+            }
+        }
     }
 
     /// Expand the tree to reveal the given file and select it.
@@ -255,7 +366,9 @@ impl FileBrowserPanel {
             list_item.set_child(Some(&expander));
         });
 
-        factory.connect_bind(|_, item| {
+        let git_status = self.git_status.clone();
+        let project_root = self.project_root.clone();
+        factory.connect_bind(move |_, item| {
             let list_item = match item.downcast_ref::<gtk4::ListItem>() {
                 Some(li) => li,
                 None => return,
@@ -293,10 +406,110 @@ impl FileBrowserPanel {
 
             if let Some(label) = hbox.last_child().and_downcast::<gtk4::Label>() {
                 label.set_text(&node.name());
+
+                // Apply git status color
+                if let Some(root_path) = project_root.borrow().clone() {
+                    let status_map = git_status.borrow();
+                    apply_git_class_to_label(&label, &node, &root_path, &status_map);
+                }
             }
         });
 
         self.list_view.set_factory(Some(&factory));
+    }
+
+    /// Set up the factory for the open buffers list view.
+    #[allow(clippy::type_complexity)]
+    fn setup_buffer_factory(
+        buffer_list_view: &gtk4::ListView,
+        on_open_file: &Rc<RefCell<Option<Box<dyn Fn(&Path)>>>>,
+    ) {
+        let factory = gtk4::SignalListItemFactory::new();
+
+        factory.connect_setup(|_, item| {
+            let list_item = match item.downcast_ref::<gtk4::ListItem>() {
+                Some(li) => li,
+                None => return,
+            };
+
+            let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+            hbox.set_margin_start(8);
+            hbox.set_margin_end(4);
+            hbox.set_margin_top(1);
+            hbox.set_margin_bottom(1);
+
+            let modified_label = gtk4::Label::new(None);
+            modified_label.set_width_chars(1);
+
+            let icon = gtk4::Image::from_icon_name("text-x-generic-symbolic");
+
+            let name_label = gtk4::Label::new(None);
+            name_label.set_halign(gtk4::Align::Start);
+            name_label.set_hexpand(true);
+            name_label.set_ellipsize(pango::EllipsizeMode::Middle);
+
+            hbox.append(&modified_label);
+            hbox.append(&icon);
+            hbox.append(&name_label);
+
+            list_item.set_child(Some(&hbox));
+        });
+
+        factory.connect_bind(|_, item| {
+            let list_item = match item.downcast_ref::<gtk4::ListItem>() {
+                Some(li) => li,
+                None => return,
+            };
+
+            let hbox = match list_item.child().and_downcast::<gtk4::Box>() {
+                Some(b) => b,
+                None => return,
+            };
+
+            let buffer_item = match list_item.item().and_downcast::<OpenBufferItem>() {
+                Some(bi) => bi,
+                None => return,
+            };
+
+            // Modified indicator
+            if let Some(modified_label) = hbox.first_child().and_downcast::<gtk4::Label>() {
+                if buffer_item.is_modified() {
+                    modified_label.set_text("●");
+                } else {
+                    modified_label.set_text(" ");
+                }
+            }
+
+            // File name
+            if let Some(name_label) = hbox.last_child().and_downcast::<gtk4::Label>() {
+                name_label.set_text(&buffer_item.name());
+            }
+        });
+
+        buffer_list_view.set_factory(Some(&factory));
+
+        // Single-click to open file
+        let open_cb = on_open_file.clone();
+        let lv = buffer_list_view.clone();
+        let click = gtk4::GestureClick::new();
+        click.set_button(1);
+        click.connect_released(move |_, _, _, _| {
+            let Some(model) = lv.model() else { return };
+            let Some(sel) = model.downcast_ref::<gtk4::SingleSelection>() else {
+                return;
+            };
+            let Some(item) = sel.selected_item() else {
+                return;
+            };
+            let Some(buffer_item) = item.downcast_ref::<OpenBufferItem>() else {
+                return;
+            };
+            let path = PathBuf::from(buffer_item.path());
+            if let Some(ref cb) = *open_cb.borrow() {
+                cb(&path);
+            }
+        });
+        buffer_list_view.add_controller(click);
     }
 
     fn setup_context_menu(&self) {
@@ -513,6 +726,70 @@ fn scroll_to_item(list_view: &gtk4::ListView, position: u32) {
             adj.set_value(value);
         }
     });
+}
+
+/// The CSS classes used for git status coloring on file labels.
+const GIT_STATUS_CLASSES: &[&str] = &[
+    "file-git-modified",
+    "file-git-added",
+    "file-git-deleted",
+    "file-git-renamed",
+];
+
+/// Walk a realized row widget downward to find a `TreeExpander`, extract
+/// the `FileNode` from it, and find the filename `Label` inside the expander.
+fn find_node_and_label_in_row(widget: &gtk4::Widget) -> Option<(FileNode, gtk4::Label)> {
+    // The row widget hierarchy is: row > cell > TreeExpander > Box > [Image, Label]
+    let expander = find_child_of_type::<gtk4::TreeExpander>(widget)?;
+    let row = expander.list_row()?;
+    let node = row.item().and_downcast::<FileNode>()?;
+    let hbox = expander.child().and_downcast::<gtk4::Box>()?;
+    let label = hbox.last_child().and_downcast::<gtk4::Label>()?;
+    Some((node, label))
+}
+
+/// Recursively search for a child widget of a specific type.
+fn find_child_of_type<T: glib::prelude::IsA<gtk4::Widget>>(widget: &gtk4::Widget) -> Option<T> {
+    if let Ok(typed) = widget.clone().downcast::<T>() {
+        return Some(typed);
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(found) = find_child_of_type::<T>(&c) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
+/// Apply the correct git status CSS class to a label based on the file node's
+/// path and the current status map.
+fn apply_git_class_to_label(
+    label: &gtk4::Label,
+    node: &FileNode,
+    root_path: &Path,
+    status_map: &HashMap<PathBuf, String>,
+) {
+    // Remove previous classes
+    for class in GIT_STATUS_CLASSES {
+        label.remove_css_class(class);
+    }
+    if node.is_directory() {
+        return;
+    }
+    let node_path = PathBuf::from(node.path());
+    let rel = node_path.strip_prefix(root_path).unwrap_or(&node_path);
+    if let Some(status) = status_map.get(rel) {
+        let css_class = match status.as_str() {
+            "m" => "file-git-modified",
+            "a" => "file-git-added",
+            "d" => "file-git-deleted",
+            "r" => "file-git-renamed",
+            _ => return,
+        };
+        label.add_css_class(css_class);
+    }
 }
 
 fn get_selected_node(list_view: &gtk4::ListView) -> Option<FileNode> {

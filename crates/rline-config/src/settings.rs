@@ -300,7 +300,8 @@ mod tests {
         );
         let right = restored.right.as_ref().unwrap();
         assert_eq!(
-            right.files, original.right.as_ref().unwrap().files,
+            right.files,
+            original.right.as_ref().unwrap().files,
             "right pane files should survive round-trip"
         );
     }
