@@ -129,7 +129,7 @@ impl InlineCompletion {
         ic
     }
 
-    /// Accept the current ghost text (keep it in the buffer).
+    /// Accept all remaining ghost text (keep it in the buffer).
     pub fn accept_completion(&self) {
         if !self.has_ghost_text.get() {
             return;
@@ -148,6 +148,55 @@ impl InlineCompletion {
         if let Some(ref hl) = *self.highlighter.borrow() {
             hl.highlight_full();
         }
+    }
+
+    /// Accept only the first line of ghost text, leaving remaining lines
+    /// as ghost text. If there is only one line, accepts all.
+    pub fn accept_one_line(&self) {
+        if !self.has_ghost_text.get() {
+            return;
+        }
+
+        let start = self.buffer.iter_at_mark(&self.start_mark);
+        let end = self.buffer.iter_at_mark(&self.end_mark);
+        let ghost_text = self.buffer.text(&start, &end, true).to_string();
+
+        // If there's no newline, accept everything.
+        let Some(newline_pos) = ghost_text.find('\n') else {
+            self.accept_completion();
+            return;
+        };
+
+        self.suppressing.set(true);
+
+        // Calculate the iter at the end of the first line (including the newline).
+        let accept_len = (newline_pos + 1) as i32;
+        let mut accept_end = start;
+        accept_end.forward_chars(accept_len);
+
+        // Remove the ghost tag from the accepted portion only.
+        let accept_start = self.buffer.iter_at_mark(&self.start_mark);
+        self.buffer
+            .remove_tag(&self.ghost_tag, &accept_start, &accept_end);
+
+        // Place cursor after the accepted line.
+        self.buffer.place_cursor(&accept_end);
+
+        // Move start_mark to the beginning of the remaining ghost text.
+        self.buffer.move_mark(&self.start_mark, &accept_end);
+
+        // Re-apply the ghost tag to remaining text to ensure it stays styled
+        // as ghost text after the cursor move.
+        let remaining_start = self.buffer.iter_at_mark(&self.start_mark);
+        let remaining_end = self.buffer.iter_at_mark(&self.end_mark);
+        self.buffer
+            .apply_tag(&self.ghost_tag, &remaining_start, &remaining_end);
+
+        self.suppressing.set(false);
+
+        // Do NOT call highlight_full() here — it would overwrite the ghost
+        // tag on remaining lines.  Syntax colors for accepted text will be
+        // applied when the last ghost line is accepted via accept_completion().
     }
 
     /// Dismiss the current ghost text (remove it from the buffer).
@@ -282,13 +331,23 @@ impl InlineCompletion {
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
 
         let ic = self.clone();
-        let handler_id = key_ctrl.connect_key_pressed(move |_ctrl, key, _code, _mods| {
+        let handler_id = key_ctrl.connect_key_pressed(move |_ctrl, key, _code, mods| {
             if !ic.has_ghost_text.get() {
                 return glib::Propagation::Proceed;
             }
 
             match key {
                 gtk4::gdk::Key::Tab => {
+                    // Tab accepts one line at a time.
+                    ic.accept_one_line();
+                    glib::Propagation::Stop
+                }
+                // Both Alt keys pressed simultaneously: accept all.
+                // When the second Alt arrives the first is already held,
+                // so the modifier state includes ALT_MASK.
+                gtk4::gdk::Key::Alt_L | gtk4::gdk::Key::Alt_R
+                    if mods.contains(gtk4::gdk::ModifierType::ALT_MASK) =>
+                {
                     ic.accept_completion();
                     glib::Propagation::Stop
                 }
@@ -296,6 +355,8 @@ impl InlineCompletion {
                     ic.dismiss_completion();
                     glib::Propagation::Stop
                 }
+                // A lone Alt press should not dismiss ghost text.
+                gtk4::gdk::Key::Alt_L | gtk4::gdk::Key::Alt_R => glib::Propagation::Proceed,
                 _ => {
                     // Any other key dismisses ghost text but lets the key through.
                     ic.dismiss_completion();
