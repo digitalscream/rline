@@ -306,11 +306,12 @@ pub fn apply_app_theme(scheme_id: &str) {
                     color: {fg_dim};
                 }}
 
-                /* ── Paned separators: thin 1px lines ── */
+                /* ── Paned separators: hidden for flat look ── */
                 paned > separator {{
-                    min-width: 1px;
-                    min-height: 1px;
-                    background-color: {separator};
+                    min-width: 0;
+                    min-height: 0;
+                    background: transparent;
+                    opacity: 0;
                 }}
 
                 /* ── Scrollbar blend ── */
@@ -362,8 +363,10 @@ pub fn apply_app_theme(scheme_id: &str) {
             }
             r#"
                 paned > separator {
-                    min-width: 1px;
-                    min-height: 1px;
+                    min-width: 0;
+                    min-height: 0;
+                    background: transparent;
+                    opacity: 0;
                 }
             "#
             .to_owned()
