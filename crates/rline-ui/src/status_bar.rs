@@ -551,6 +551,7 @@ fn find_row_at_coords(
     y: f64,
     gesture_widget: &gtk4::Widget,
 ) -> Option<gtk4::ListBoxRow> {
+    #[allow(deprecated)] // compute_point requires graphene dependency
     let (_, list_y) = gesture_widget.translate_coordinates(list, x, y)?;
     list.row_at_y(list_y as i32)
 }

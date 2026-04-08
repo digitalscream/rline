@@ -161,24 +161,17 @@ impl DiffTab {
     fn create_view(buffer: &sourceview5::Buffer, settings: &EditorSettings) -> sourceview5::View {
         let view = sourceview5::View::with_buffer(buffer);
         view.set_show_line_numbers(true);
-        view.set_monospace(true);
         view.set_vexpand(true);
         view.set_hexpand(true);
         view.set_tab_width(settings.tab_width);
         view.set_highlight_current_line(false);
         view.set_wrap_mode(gtk4::WrapMode::None);
 
-        // Apply font.
-        let css = format!(
-            "textview {{ font-family: \"{}\"; font-size: {}pt; }}",
-            settings.editor_font_family, settings.font_size
-        );
-        let provider = gtk4::CssProvider::new();
-        provider.load_from_data(&css);
-        gtk4::style_context_add_provider_for_display(
-            &view.display(),
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        // Apply font via the shared EditorTab helper.
+        crate::editor::EditorTab::apply_editor_font(
+            &view,
+            &settings.editor_font_family,
+            settings.font_size,
         );
 
         view
@@ -388,16 +381,10 @@ impl DiffTab {
     pub fn apply_settings(&self, settings: &EditorSettings) {
         for view in [&self.left_view, &self.right_view] {
             view.set_tab_width(settings.tab_width);
-            let css = format!(
-                "textview {{ font-family: \"{}\"; font-size: {}pt; }}",
-                settings.editor_font_family, settings.font_size
-            );
-            let provider = gtk4::CssProvider::new();
-            provider.load_from_data(&css);
-            gtk4::style_context_add_provider_for_display(
-                &view.display(),
-                &provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            crate::editor::EditorTab::apply_editor_font(
+                view,
+                &settings.editor_font_family,
+                settings.font_size,
             );
         }
         Self::apply_theme(&self.left_buffer, &settings.theme);

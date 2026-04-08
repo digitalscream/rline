@@ -52,7 +52,6 @@ impl EditorTab {
         view.set_indent_width(settings.tab_width as i32);
         view.set_insert_spaces_instead_of_tabs(settings.insert_spaces);
         view.set_highlight_current_line(true);
-        view.set_monospace(true);
         view.set_vexpand(true);
         view.set_hexpand(true);
 
@@ -66,7 +65,7 @@ impl EditorTab {
         Self::apply_theme_to_buffer(&buffer, &settings.theme);
 
         // Apply font
-        Self::apply_font(&view, &settings.editor_font_family, settings.font_size);
+        Self::apply_editor_font(&view, &settings.editor_font_family, settings.font_size);
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(&view)
@@ -247,7 +246,7 @@ impl EditorTab {
             self.view.set_wrap_mode(gtk4::WrapMode::None);
         }
         Self::apply_theme_to_buffer(&self.buffer, &settings.theme);
-        Self::apply_font(&self.view, &settings.editor_font_family, settings.font_size);
+        Self::apply_editor_font(&self.view, &settings.editor_font_family, settings.font_size);
 
         // Rebuild tree-sitter tags from the new theme and re-highlight
         if let Some(ref mut hl) = *self.highlighter.borrow_mut() {
@@ -286,15 +285,48 @@ impl EditorTab {
         crate::theming::apply_app_theme(theme_id);
     }
 
-    fn apply_font(view: &sourceview5::View, font_family: &str, font_size: u32) {
-        let css =
-            format!("textview {{ font-family: \"{font_family}\"; font-size: {font_size}pt; }}");
-        let provider = gtk4::CssProvider::new();
-        provider.load_from_data(&css);
-        gtk4::style_context_add_provider_for_display(
-            &view.display(),
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    /// Apply the editor font CSS to a `sourceview5::View`.
+    ///
+    /// Re-uses a single CSS provider per thread to avoid leaking providers on
+    /// repeated calls. When the default `"Monospace"` family is specified, a
+    /// fallback chain of popular coding fonts is used instead.
+    pub fn apply_editor_font(view: &sourceview5::View, font_family: &str, font_size: u32) {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static FONT_PROVIDER: RefCell<Option<gtk4::CssProvider>> = const { RefCell::new(None) };
+        }
+
+        // When the user hasn't chosen a specific font, try high-quality coding
+        // fonts before falling back to the generic "Monospace" alias.
+        let font_css = if font_family == "Monospace" {
+            "\"JetBrains Mono\", \"Fira Code\", \"Cascadia Code\", \"Source Code Pro\", \"Monospace\"".to_owned()
+        } else {
+            format!("\"{font_family}\"")
+        };
+
+        let css = format!(
+            "textview {{ font-family: {font_css}; font-size: {font_size}px; line-height: 1.4; font-feature-settings: \"liga\" 0, \"calt\" 1; }}"
         );
+
+        let display = view.display();
+
+        FONT_PROVIDER.with(|cell| {
+            let mut slot = cell.borrow_mut();
+
+            // Remove the old provider so we don't accumulate stale ones.
+            if let Some(old) = slot.take() {
+                gtk4::style_context_remove_provider_for_display(&display, &old);
+            }
+
+            let provider = gtk4::CssProvider::new();
+            provider.load_from_string(&css);
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            *slot = Some(provider);
+        });
     }
 }

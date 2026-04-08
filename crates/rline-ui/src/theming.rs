@@ -104,6 +104,18 @@ pub fn terminal_colors_for_scheme(scheme_id: &str) -> Option<TerminalColors> {
 /// sets the GTK dark theme preference accordingly, and applies global CSS
 /// covering all UI elements.
 pub fn apply_app_theme(scheme_id: &str) {
+    // Configure font rendering for maximum crispness.
+    if let Some(settings) = gtk4::Settings::default() {
+        // Take manual control of font rendering instead of letting GTK decide.
+        settings.set_gtk_font_rendering(gtk4::FontRendering::Manual);
+        // Snap font metrics to pixel boundaries — eliminates fuzzy glyphs.
+        settings.set_gtk_hint_font_metrics(true);
+        // Full hinting aligns glyphs precisely to the pixel grid.
+        settings.set_gtk_xft_antialias(1);
+        settings.set_gtk_xft_hinting(1);
+        settings.set_gtk_xft_hintstyle(Some("hintfull"));
+    }
+
     let scheme_manager = sourceview5::StyleSchemeManager::default();
     let scheme = match scheme_manager.scheme(scheme_id) {
         Some(s) => s,
@@ -508,7 +520,7 @@ pub fn apply_app_theme(scheme_id: &str) {
     let full_css = format!("{css}\n{status_bar_css}\n{git_css}");
 
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(&full_css);
+    provider.load_from_string(&full_css);
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(

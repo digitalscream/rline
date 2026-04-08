@@ -15,7 +15,7 @@ pub struct EditorSettings {
     pub theme: String,
     /// Editor font family.
     pub editor_font_family: String,
-    /// Editor font size in points.
+    /// Editor font size in pixels.
     pub font_size: u32,
     /// Tab width in spaces.
     pub tab_width: u32,
@@ -28,7 +28,7 @@ pub struct EditorSettings {
     pub wrap_text: bool,
     /// Terminal font family.
     pub terminal_font_family: String,
-    /// Terminal font size in points.
+    /// Terminal font size in pixels.
     pub terminal_font_size: u32,
     /// Whether to reopen the last project on startup.
     pub open_last_project: bool,
@@ -49,7 +49,7 @@ impl Default for EditorSettings {
         Self {
             theme: "Adwaita-dark".to_owned(),
             editor_font_family: "Monospace".to_owned(),
-            font_size: 13,
+            font_size: 15,
             tab_width: 4,
             insert_spaces: true,
             show_line_numbers: true,
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_editor_settings_default_font_size() {
         let settings = EditorSettings::default();
-        assert_eq!(settings.font_size, 13, "default font size should be 13");
+        assert_eq!(settings.font_size, 15, "default font size should be 15");
     }
 
     #[test]
