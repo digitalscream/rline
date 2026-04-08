@@ -11,6 +11,7 @@ use rline_config::EditorSettings;
 use rline_core::LineIndex;
 
 use crate::editor::find_bar::FindBar;
+use crate::editor::inline_completion::InlineCompletion;
 use crate::editor::syntax_highlighter::SyntaxHighlighter;
 use crate::error::UiError;
 
@@ -37,6 +38,8 @@ pub struct EditorTab {
     use_treesitter: bool,
     /// Per-tab find/replace bar (overlaid top-right).
     find_bar: FindBar,
+    /// AI inline completion handler (None when AI is disabled).
+    inline_completion: Rc<RefCell<Option<InlineCompletion>>>,
 }
 
 impl EditorTab {
@@ -123,6 +126,20 @@ impl EditorTab {
             }
         ));
 
+        let highlighter: Rc<RefCell<Option<SyntaxHighlighter>>> = Rc::new(RefCell::new(None));
+
+        // Set up inline completion if AI is enabled and configured.
+        let inline_completion = if settings.ai_enabled && !settings.ai_model.is_empty() {
+            Some(InlineCompletion::new(
+                &view,
+                &buffer,
+                settings,
+                highlighter.clone(),
+            ))
+        } else {
+            None
+        };
+
         Self {
             overlay,
             view,
@@ -131,9 +148,10 @@ impl EditorTab {
             filename_label,
             close_btn,
             path: path_store,
-            highlighter: Rc::new(RefCell::new(None)),
+            highlighter,
             use_treesitter: settings.use_treesitter,
             find_bar,
+            inline_completion: Rc::new(RefCell::new(inline_completion)),
         }
     }
 
@@ -170,6 +188,9 @@ impl EditorTab {
 
     /// Save the buffer contents to the associated file path.
     pub fn save(&self) -> Result<(), UiError> {
+        // Dismiss ghost text before saving to avoid writing it to disk.
+        self.dismiss_ghost_text();
+
         let path_ref = self.path.borrow();
         if let Some(ref path) = *path_ref {
             let (start, end) = self.buffer.bounds();
@@ -263,6 +284,63 @@ impl EditorTab {
         // Rebuild tree-sitter tags from the new theme and re-highlight
         if let Some(ref mut hl) = *self.highlighter.borrow_mut() {
             hl.rebuild_tags_and_rehighlight();
+        }
+
+        // Handle AI completion settings changes.
+        let mut ic_ref = self.inline_completion.borrow_mut();
+        let ai_should_be_on = settings.ai_enabled && !settings.ai_model.is_empty();
+
+        tracing::info!(
+            "apply_settings AI: currently={}, should_be_on={ai_should_be_on}, enabled={}, model='{}'",
+            ic_ref.is_some(),
+            settings.ai_enabled,
+            settings.ai_model,
+        );
+
+        match (ic_ref.is_some(), ai_should_be_on) {
+            (false, true) => {
+                // AI was disabled, now enabled — create handler.
+                tracing::info!("creating InlineCompletion for existing tab");
+                *ic_ref = Some(InlineCompletion::new(
+                    &self.view,
+                    &self.buffer,
+                    settings,
+                    self.highlighter.clone(),
+                ));
+            }
+            (true, false) => {
+                // AI was enabled, now disabled — clean up.
+                tracing::info!("disabling InlineCompletion for tab");
+                if let Some(ic) = ic_ref.take() {
+                    ic.cleanup();
+                }
+            }
+            (true, true) => {
+                // AI stays enabled — update settings and ghost tag color.
+                if let Some(ref ic) = *ic_ref {
+                    ic.update_settings(settings);
+                    ic.update_ghost_tag_color();
+                }
+            }
+            (false, false) => {} // Nothing to do.
+        }
+    }
+
+    /// Manually trigger an AI inline completion request.
+    pub fn trigger_completion(&self) {
+        let ic_ref = self.inline_completion.borrow();
+        if let Some(ref ic) = *ic_ref {
+            tracing::info!("tab.trigger_completion: forwarding to InlineCompletion");
+            ic.trigger_completion();
+        } else {
+            tracing::info!("tab.trigger_completion: no InlineCompletion attached");
+        }
+    }
+
+    /// Dismiss any visible ghost text (e.g. before saving).
+    pub fn dismiss_ghost_text(&self) {
+        if let Some(ref ic) = *self.inline_completion.borrow() {
+            ic.dismiss_completion();
         }
     }
 

@@ -1,10 +1,15 @@
-//! rline-ai — AI provider abstraction for code completion and chat.
+//! rline-ai — AI completion client for code editors.
 //!
-//! This crate will house the `AiProvider` trait and provider implementations
-//! in a future iteration. Currently a placeholder.
+//! Provides an HTTP client for OpenAI-compatible `/v1/completions` endpoints
+//! with FIM (Fill-in-the-Middle) support via the `suffix` request field.
+//! Async operations run on a dedicated tokio runtime to avoid blocking GTK.
 
-/// Placeholder trait for AI provider abstraction.
-///
-/// Will be implemented in a future iteration with methods for
-/// completion, streaming, and chat.
-pub trait AiProvider: Send + Sync {}
+pub mod client;
+pub mod error;
+pub mod runtime;
+pub mod types;
+
+pub use client::CompletionClient;
+pub use error::AiError;
+pub use runtime::ai_runtime;
+pub use types::{CompletionRequest, CompletionResponse};

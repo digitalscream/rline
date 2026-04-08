@@ -343,8 +343,8 @@ impl SyntaxHighlighter {
         self.delete_handler = Some(delete_handler);
     }
 
-    /// Temporarily block change signals (e.g. during bulk tag application).
-    fn block_signals(&self) {
+    /// Temporarily block change signals (e.g. during ghost text operations).
+    pub fn block_signals(&self) {
         if let Some(ref handler) = self.insert_handler {
             self.buffer.block_signal(handler);
         }
@@ -354,7 +354,7 @@ impl SyntaxHighlighter {
     }
 
     /// Unblock change signals.
-    fn unblock_signals(&self) {
+    pub fn unblock_signals(&self) {
         if let Some(ref handler) = self.insert_handler {
             self.buffer.unblock_signal(handler);
         }

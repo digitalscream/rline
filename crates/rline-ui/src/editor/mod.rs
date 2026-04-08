@@ -2,12 +2,14 @@
 
 mod editor_pane;
 mod find_bar;
+mod inline_completion;
 mod settings_dialog;
 mod split_container;
 mod syntax_highlighter;
 mod tab;
 
 pub use editor_pane::EditorPane;
+pub use inline_completion::InlineCompletion;
 pub use settings_dialog::SettingsDialog;
 pub use split_container::SplitContainer;
 pub use syntax_highlighter::SyntaxHighlighter;
