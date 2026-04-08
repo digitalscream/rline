@@ -26,4 +26,8 @@ pub enum ConfigError {
     /// A VS Code theme file was invalid or could not be converted.
     #[error("invalid VS Code theme: {0}")]
     InvalidVscodeTheme(String),
+
+    /// A Zed theme file was invalid or could not be converted.
+    #[error("invalid Zed theme: {0}")]
+    InvalidZedTheme(String),
 }

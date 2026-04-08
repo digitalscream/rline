@@ -5,6 +5,7 @@ pub mod paths;
 pub mod settings;
 pub mod syntax_theme;
 pub mod vscode_import;
+pub mod zed_import;
 
 pub use error::ConfigError;
 pub use settings::{EditorSettings, PaneState, SessionState};
