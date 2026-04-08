@@ -5,6 +5,8 @@ use std::path::Path;
 use gtk4::prelude::*;
 use vte4::prelude::*;
 
+use crate::theming::TerminalColors;
+
 /// A single terminal tab backed by a VTE terminal widget.
 #[derive(Debug, Clone)]
 pub struct TerminalTab {
@@ -87,6 +89,22 @@ impl TerminalTab {
     /// The close button in the tab label.
     pub fn close_btn(&self) -> &gtk4::Button {
         &self.close_btn
+    }
+
+    /// Apply theme colors (background, foreground, cursor, selection, bold) to the terminal.
+    pub fn apply_theme(&self, colors: &TerminalColors) {
+        Self::apply_theme_to_terminal(&self.terminal, colors);
+    }
+
+    /// Apply theme colors to a VTE terminal widget.
+    pub fn apply_theme_to_terminal(terminal: &vte4::Terminal, colors: &TerminalColors) {
+        terminal.set_color_background(&colors.background);
+        terminal.set_color_foreground(&colors.foreground);
+        terminal.set_color_cursor(Some(&colors.cursor));
+        terminal.set_color_cursor_foreground(Some(&colors.cursor_foreground));
+        terminal.set_color_highlight(Some(&colors.highlight));
+        terminal.set_color_highlight_foreground(Some(&colors.highlight_foreground));
+        terminal.set_color_bold(Some(&colors.bold));
     }
 
     /// Apply font family and size to the terminal widget.

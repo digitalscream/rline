@@ -4,6 +4,109 @@
 //! application chrome adopts a derived palette so the UI feels cohesive.
 //! The system's dark/light preference is also set to match.
 
+/// Terminal color palette extracted from the current theme.
+#[derive(Debug, Clone)]
+pub struct TerminalColors {
+    /// Terminal background color.
+    pub background: gtk4::gdk::RGBA,
+    /// Terminal foreground (text) color.
+    pub foreground: gtk4::gdk::RGBA,
+    /// Cursor background color.
+    pub cursor: gtk4::gdk::RGBA,
+    /// Cursor foreground (text under cursor) color.
+    pub cursor_foreground: gtk4::gdk::RGBA,
+    /// Selection highlight background color.
+    pub highlight: gtk4::gdk::RGBA,
+    /// Selection highlight foreground color.
+    pub highlight_foreground: gtk4::gdk::RGBA,
+    /// Bold text color.
+    pub bold: gtk4::gdk::RGBA,
+}
+
+/// Extract terminal-appropriate colors from a sourceview style scheme.
+///
+/// Returns `None` if the scheme cannot be found or has no background color.
+pub fn terminal_colors_for_scheme(scheme_id: &str) -> Option<TerminalColors> {
+    let scheme_manager = sourceview5::StyleSchemeManager::default();
+    let scheme = scheme_manager.scheme(scheme_id)?;
+
+    let syntax_theme = rline_config::SyntaxTheme::load(scheme_id).ok().flatten();
+
+    let ui = |key: &str| -> Option<String> {
+        syntax_theme
+            .as_ref()
+            .and_then(|t| t.ui_color(key))
+            .map(|s| s.to_string())
+    };
+
+    // Editor background
+    let bg_hex = scheme
+        .style("text")
+        .and_then(|style| {
+            if style.is_background_set() {
+                style.background()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.to_string())?;
+
+    let fg_hex = scheme
+        .style("text")
+        .and_then(|style| {
+            if style.is_foreground_set() {
+                style.foreground()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.to_string());
+
+    let is_dark = perceived_brightness(&bg_hex) < 128;
+
+    let terminal_bg = ui("terminal.background").unwrap_or_else(|| bg_hex.clone());
+    let terminal_fg = ui("terminal.foreground").unwrap_or_else(|| {
+        fg_hex
+            .clone()
+            .unwrap_or_else(|| if is_dark { "#e0e0e0" } else { "#1e1e1e" }.into())
+    });
+
+    let cursor_hex = ui("terminalCursor.background").unwrap_or_else(|| terminal_fg.clone());
+    let cursor_fg_hex = ui("terminalCursor.foreground").unwrap_or_else(|| terminal_bg.clone());
+
+    let highlight_hex = ui("terminal.selectionBackground").unwrap_or_else(|| {
+        if is_dark {
+            "#264f78".into()
+        } else {
+            "#add6ff".into()
+        }
+    });
+    let highlight_fg_hex =
+        ui("terminal.selectionForeground").unwrap_or_else(|| terminal_fg.clone());
+
+    let bold_hex = ui("terminal.ansiBrightWhite").unwrap_or_else(|| {
+        if is_dark {
+            "#ffffff".into()
+        } else {
+            "#000000".into()
+        }
+    });
+
+    let parse = |hex: &str| -> gtk4::gdk::RGBA {
+        gtk4::gdk::RGBA::parse(hex).unwrap_or(gtk4::gdk::RGBA::WHITE)
+    };
+
+    Some(TerminalColors {
+        background: parse(&terminal_bg),
+        foreground: parse(&terminal_fg),
+        cursor: parse(&cursor_hex),
+        cursor_foreground: parse(&cursor_fg_hex),
+        highlight: parse(&highlight_hex),
+        highlight_foreground: parse(&highlight_fg_hex),
+        bold: parse(&bold_hex),
+    })
+}
+
 /// Apply application-wide theming derived from the given sourceview style scheme.
 ///
 /// Extracts the editor background color, derives a chrome palette from it,

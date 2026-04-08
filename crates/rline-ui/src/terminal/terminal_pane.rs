@@ -8,6 +8,7 @@ use gtk4::prelude::*;
 use vte4::prelude::*;
 
 use super::terminal_tab::TerminalTab;
+use crate::theming::TerminalColors;
 
 /// The terminal pane containing a notebook of terminal tabs.
 #[derive(Debug, Clone)]
@@ -18,6 +19,7 @@ pub struct TerminalPane {
     tab_counter: Rc<RefCell<usize>>,
     font_family: Rc<RefCell<String>>,
     font_size: Rc<RefCell<u32>>,
+    theme_colors: Rc<RefCell<Option<TerminalColors>>>,
 }
 
 impl Default for TerminalPane {
@@ -44,6 +46,8 @@ impl TerminalPane {
         container.append(&notebook);
         container.set_vexpand(true);
 
+        let theme_colors = crate::theming::terminal_colors_for_scheme(&settings.theme);
+
         let pane = Self {
             container,
             notebook,
@@ -51,6 +55,7 @@ impl TerminalPane {
             tab_counter: Rc::new(RefCell::new(0)),
             font_family: Rc::new(RefCell::new(settings.terminal_font_family)),
             font_size: Rc::new(RefCell::new(settings.terminal_font_size)),
+            theme_colors: Rc::new(RefCell::new(theme_colors)),
         };
 
         // Wire "+" button
@@ -75,6 +80,11 @@ impl TerminalPane {
         let font_family = self.font_family.borrow().clone();
         let font_size = *self.font_size.borrow();
         let tab = TerminalTab::new(index, dir.as_deref(), &font_family, font_size);
+
+        // Apply theme colors to the new terminal
+        if let Some(ref colors) = *self.theme_colors.borrow() {
+            tab.apply_theme(colors);
+        }
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(tab.widget())
@@ -138,7 +148,11 @@ impl TerminalPane {
             .replace(settings.terminal_font_family.clone());
         self.font_size.replace(settings.terminal_font_size);
 
-        // Apply to all existing terminal tabs
+        // Update cached theme colors
+        let colors = crate::theming::terminal_colors_for_scheme(&settings.theme);
+        self.theme_colors.replace(colors);
+
+        // Apply font and theme to all existing terminal tabs
         let font_desc = gtk4::pango::FontDescription::from_string(&format!(
             "{} {}",
             settings.terminal_font_family, settings.terminal_font_size
@@ -150,6 +164,28 @@ impl TerminalPane {
                 if let Some(scrolled) = page.downcast_ref::<gtk4::ScrolledWindow>() {
                     if let Some(terminal) = scrolled.child().and_downcast::<vte4::Terminal>() {
                         terminal.set_font(Some(&font_desc));
+                        if let Some(ref colors) = *self.theme_colors.borrow() {
+                            TerminalTab::apply_theme_to_terminal(&terminal, colors);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply theme colors to all existing terminal tabs.
+    pub fn apply_theme(&self, scheme_id: &str) {
+        let colors = crate::theming::terminal_colors_for_scheme(scheme_id);
+        self.theme_colors.replace(colors);
+
+        let n_pages = self.notebook.n_pages();
+        for i in 0..n_pages {
+            if let Some(page) = self.notebook.nth_page(Some(i)) {
+                if let Some(scrolled) = page.downcast_ref::<gtk4::ScrolledWindow>() {
+                    if let Some(terminal) = scrolled.child().and_downcast::<vte4::Terminal>() {
+                        if let Some(ref colors) = *self.theme_colors.borrow() {
+                            TerminalTab::apply_theme_to_terminal(&terminal, colors);
+                        }
                     }
                 }
             }
