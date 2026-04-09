@@ -1,0 +1,429 @@
+//! Core agent loop: drives multi-turn tool-use conversations.
+//!
+//! The agent loop sends conversation history to the chat API, streams the
+//! response, dispatches tool calls (with optional user approval), feeds
+//! results back, and repeats until the model stops calling tools or the
+//! task is completed.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
+
+use crate::agent::context::{build_system_prompt, ConversationContext};
+use crate::agent::event::AgentEvent;
+use crate::chat::client::{ChatClient, StreamEvent};
+use crate::chat::types::ToolCall;
+use crate::tools::{ToolCategory, ToolRegistry, ToolResult};
+
+/// The agent's operating mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMode {
+    /// Read-only mode: only analysis and planning tools are available.
+    Plan,
+    /// Full mode: all tools including file writes and command execution.
+    Act,
+}
+
+impl AgentMode {
+    /// Whether this mode is read-only.
+    pub fn is_read_only(self) -> bool {
+        self == Self::Plan
+    }
+}
+
+/// Callback type for checking whether a tool call should be auto-approved.
+pub type AutoApproveFn = Box<dyn Fn(&str, ToolCategory, &str) -> bool + Send + Sync>;
+
+/// The core agent loop orchestrator.
+pub struct AgentLoop {
+    client: ChatClient,
+    context: ConversationContext,
+    registry: ToolRegistry,
+    mode: AgentMode,
+    event_tx: mpsc::Sender<AgentEvent>,
+    auto_approve: AutoApproveFn,
+    cancel: CancellationToken,
+    workspace_root: PathBuf,
+    max_tokens: Option<u32>,
+    temperature: Option<f64>,
+    /// Maximum number of tool-use turns before forcing a stop.
+    max_turns: usize,
+}
+
+impl AgentLoop {
+    /// Create a new agent loop with a fresh conversation context.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        client: ChatClient,
+        mode: AgentMode,
+        event_tx: mpsc::Sender<AgentEvent>,
+        auto_approve: AutoApproveFn,
+        cancel: CancellationToken,
+        workspace_root: PathBuf,
+        max_tokens: Option<u32>,
+        temperature: Option<f64>,
+        max_context_tokens: usize,
+    ) -> Self {
+        let mode_str = match mode {
+            AgentMode::Plan => "PLAN",
+            AgentMode::Act => "ACT",
+        };
+        let system_prompt = build_system_prompt(&workspace_root.to_string_lossy(), mode_str);
+
+        Self {
+            client,
+            context: ConversationContext::new(system_prompt, max_context_tokens),
+            registry: ToolRegistry::new(),
+            mode,
+            event_tx,
+            auto_approve,
+            cancel,
+            workspace_root,
+            max_tokens,
+            temperature,
+            max_turns: 50,
+        }
+    }
+
+    /// Create an agent loop that continues an existing conversation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_context(
+        client: ChatClient,
+        mode: AgentMode,
+        context: ConversationContext,
+        event_tx: mpsc::Sender<AgentEvent>,
+        auto_approve: AutoApproveFn,
+        cancel: CancellationToken,
+        workspace_root: PathBuf,
+        max_tokens: Option<u32>,
+        temperature: Option<f64>,
+    ) -> Self {
+        Self {
+            client,
+            context,
+            registry: ToolRegistry::new(),
+            mode,
+            event_tx,
+            auto_approve,
+            cancel,
+            workspace_root,
+            max_tokens,
+            temperature,
+            max_turns: 50,
+        }
+    }
+
+    /// Run the agent loop with an initial user message.
+    ///
+    /// Returns the conversation context so it can be reused in subsequent
+    /// sends (preserving history across messages and mode switches).
+    pub async fn run(mut self, user_message: String) -> ConversationContext {
+        info!("agent loop starting in {:?} mode", self.mode);
+        self.context.add_user_message(&user_message);
+        self.send_context_update();
+
+        let mut turn = 0;
+
+        loop {
+            if self.cancel.is_cancelled() {
+                let _ = self
+                    .event_tx
+                    .send(AgentEvent::Error("Cancelled".to_owned()));
+                return self.context;
+            }
+
+            if turn >= self.max_turns {
+                warn!("agent hit max turns limit ({turn})");
+                let _ = self.event_tx.send(AgentEvent::Error(
+                    "Maximum tool-use turns reached. Please start a new task.".to_owned(),
+                ));
+                return self.context;
+            }
+
+            turn += 1;
+            debug!("agent turn {turn}");
+
+            // Build the request.
+            let tool_defs = self.registry.definitions(self.mode == AgentMode::Plan);
+            let request = self.context.to_request(
+                "", // model is set by ChatClient
+                tool_defs,
+                self.max_tokens,
+                self.temperature,
+            );
+
+            // Send the request and get the async stream receiver.
+            let mut stream_rx = self.client.send_streaming(request, self.cancel.clone());
+
+            // Process stream events.
+            let mut accumulated_text = String::new();
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+            loop {
+                if self.cancel.is_cancelled() {
+                    let _ = self
+                        .event_tx
+                        .send(AgentEvent::Error("Cancelled".to_owned()));
+                    return self.context;
+                }
+
+                match stream_rx.recv().await {
+                    Some(StreamEvent::TextDelta(delta)) => {
+                        accumulated_text.push_str(&delta);
+                        let _ = self.event_tx.send(AgentEvent::TextDelta(delta));
+                    }
+                    Some(StreamEvent::ToolCalls(calls)) => {
+                        tool_calls.extend(calls);
+                    }
+                    Some(StreamEvent::Done { text }) => {
+                        if let Some(t) = text {
+                            accumulated_text = t;
+                        }
+                        break;
+                    }
+                    None => {
+                        // Channel closed — stream task ended.
+                        break;
+                    }
+                }
+            }
+
+            if tool_calls.is_empty() {
+                // No tool calls — the model just responded with text.
+                if !accumulated_text.is_empty() {
+                    self.context.add_assistant_message(&accumulated_text);
+                }
+                self.send_context_update();
+                let _ = self.event_tx.send(AgentEvent::TurnComplete);
+                let _ = self.event_tx.send(AgentEvent::Finished {
+                    summary: None,
+                    plan_mode: self.mode == AgentMode::Plan,
+                });
+                return self.context;
+            }
+
+            // Record the assistant message with tool calls.
+            let text_for_context = if accumulated_text.is_empty() {
+                None
+            } else {
+                Some(accumulated_text.clone())
+            };
+            self.context
+                .add_assistant_tool_calls(text_for_context, tool_calls.clone());
+
+            // Execute each tool call.
+            let mut should_finish = false;
+
+            for tc in &tool_calls {
+                if self.cancel.is_cancelled() {
+                    let _ = self
+                        .event_tx
+                        .send(AgentEvent::Error("Cancelled".to_owned()));
+                    return self.context;
+                }
+
+                let tool_name = &tc.function.name;
+                let tool_args = &tc.function.arguments;
+
+                // Notify UI that a tool call is starting.
+                let _ = self.event_tx.send(AgentEvent::ToolCallStart {
+                    id: tc.id.clone(),
+                    name: tool_name.clone(),
+                    arguments: tool_args.clone(),
+                });
+
+                // Handle special interactive tools.
+                if tool_name == "ask_followup_question" {
+                    let result = self.handle_followup_question(&tc.id, tool_args).await;
+                    if result.is_none() {
+                        // Cancelled or channel closed.
+                        return self.context;
+                    }
+                    continue;
+                }
+
+                if tool_name == "attempt_completion" || tool_name == "plan_mode_respond" {
+                    let is_plan = tool_name == "plan_mode_respond";
+                    let result = self
+                        .registry
+                        .execute(tool_name, tool_args, &self.workspace_root);
+                    let tool_result = match result {
+                        Ok(r) => r,
+                        Err(e) => ToolResult::err(format!("Tool error: {e}")),
+                    };
+
+                    self.context.add_tool_result(&tc.id, &tool_result.output);
+
+                    let _ = self.event_tx.send(AgentEvent::ToolResult {
+                        id: tc.id.clone(),
+                        name: tool_name.clone(),
+                        success: tool_result.success,
+                        output: tool_result.output.clone(),
+                    });
+
+                    let _ = self.event_tx.send(AgentEvent::Finished {
+                        summary: Some(tool_result.output),
+                        plan_mode: is_plan,
+                    });
+                    should_finish = true;
+                    break;
+                }
+
+                // Check permissions for non-interactive tools.
+                let category = self
+                    .registry
+                    .get(tool_name)
+                    .map(|t| t.category())
+                    .unwrap_or(ToolCategory::ExecuteCommand);
+
+                let approved = if (self.auto_approve)(tool_name, category, tool_args) {
+                    true
+                } else {
+                    // Ask the UI for approval.
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = self.event_tx.send(AgentEvent::ApprovalNeeded {
+                        id: tc.id.clone(),
+                        name: tool_name.clone(),
+                        category,
+                        arguments: tool_args.clone(),
+                        respond: resp_tx,
+                    });
+
+                    // Wait for the user's decision.
+                    match resp_rx.await {
+                        Ok(decision) => decision,
+                        Err(_) => {
+                            // Channel closed — user likely cancelled.
+                            let _ = self
+                                .event_tx
+                                .send(AgentEvent::Error("Approval cancelled".to_owned()));
+                            return self.context;
+                        }
+                    }
+                };
+
+                let tool_result = if approved {
+                    // Execute the tool on a blocking thread.
+                    let name = tool_name.clone();
+                    let args = tool_args.clone();
+                    let root = self.workspace_root.clone();
+                    let registry_result = tokio::task::spawn_blocking(move || {
+                        let registry = ToolRegistry::new();
+                        registry.execute(&name, &args, &root)
+                    })
+                    .await;
+
+                    match registry_result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => ToolResult::err(format!("Tool error: {e}")),
+                        Err(e) => ToolResult::err(format!("Task join error: {e}")),
+                    }
+                } else {
+                    ToolResult::err("Tool execution denied by user.".to_owned())
+                };
+
+                self.context.add_tool_result(&tc.id, &tool_result.output);
+
+                // Emit FileChanged for file-editing tools so the UI can show a diff.
+                if tool_result.success
+                    && (tool_name == "write_to_file" || tool_name == "replace_in_file")
+                {
+                    if let Some(path) = extract_file_path(tool_args, &self.workspace_root) {
+                        let _ = self.event_tx.send(AgentEvent::FileChanged { path });
+                    }
+                }
+
+                let _ = self.event_tx.send(AgentEvent::ToolResult {
+                    id: tc.id.clone(),
+                    name: tool_name.clone(),
+                    success: tool_result.success,
+                    output: tool_result.output,
+                });
+            }
+
+            self.send_context_update();
+
+            if should_finish {
+                return self.context;
+            }
+
+            // Continue to next turn — the model will see the tool results.
+        }
+    }
+
+    /// Send a context usage update to the UI.
+    fn send_context_update(&self) {
+        let _ = self.event_tx.send(AgentEvent::ContextUpdate {
+            used_tokens: self.context.estimated_tokens(),
+            max_tokens: self.context.max_tokens(),
+        });
+    }
+
+    /// Handle the `ask_followup_question` tool by routing to the UI.
+    async fn handle_followup_question(
+        &mut self,
+        tool_call_id: &str,
+        arguments: &str,
+    ) -> Option<()> {
+        #[derive(serde::Deserialize)]
+        struct QuestionArgs {
+            question: String,
+        }
+
+        let args: QuestionArgs = match serde_json::from_str(arguments) {
+            Ok(a) => a,
+            Err(e) => {
+                let err_msg = format!("Invalid question arguments: {e}");
+                self.context.add_tool_result(tool_call_id, &err_msg);
+                let _ = self.event_tx.send(AgentEvent::ToolResult {
+                    id: tool_call_id.to_owned(),
+                    name: "ask_followup_question".to_owned(),
+                    success: false,
+                    output: err_msg,
+                });
+                return Some(());
+            }
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let _ = self.event_tx.send(AgentEvent::FollowupQuestion {
+            question: args.question,
+            respond: resp_tx,
+        });
+
+        match resp_rx.await {
+            Ok(answer) => {
+                self.context.add_tool_result(tool_call_id, &answer);
+                let _ = self.event_tx.send(AgentEvent::ToolResult {
+                    id: tool_call_id.to_owned(),
+                    name: "ask_followup_question".to_owned(),
+                    success: true,
+                    output: answer,
+                });
+                Some(())
+            }
+            Err(_) => {
+                let _ = self
+                    .event_tx
+                    .send(AgentEvent::Error("Followup question cancelled".to_owned()));
+                None
+            }
+        }
+    }
+}
+
+/// Extract the "path" field from tool arguments and resolve it against
+/// the workspace root to produce an absolute path.
+fn extract_file_path(arguments: &str, workspace_root: &Path) -> Option<PathBuf> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let path_str = v.get("path")?.as_str()?;
+    let p = std::path::Path::new(path_str);
+    if p.is_absolute() {
+        Some(p.to_path_buf())
+    } else {
+        Some(workspace_root.join(p))
+    }
+}

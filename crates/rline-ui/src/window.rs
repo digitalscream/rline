@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 
+use crate::agent::AgentPanel;
 use crate::editor::SplitContainer;
 use crate::file_browser::FileBrowserPanel;
 use crate::git::GitPanel;
@@ -28,6 +29,7 @@ mod imp {
         pub terminal_pane: RefCell<Option<TerminalPane>>,
         pub status_bar: RefCell<Option<StatusBar>>,
         pub left_stack: RefCell<Option<gtk4::Stack>>,
+        pub agent_panel: RefCell<Option<AgentPanel>>,
         pub project_root: RefCell<Option<PathBuf>>,
         /// File monitors watching `.git/index` and `.git/HEAD` for change count updates.
         pub git_monitors: RefCell<Vec<gio::FileMonitor>>,
@@ -173,13 +175,10 @@ impl RlineWindow {
         middle_paned.set_shrink_end_child(false);
         middle_paned.set_position(550);
 
-        // ── Right pane: AI placeholder ──
-        let right_label = gtk4::Label::new(Some("AI Agent (coming soon)"));
-        right_label.set_vexpand(true);
-        right_label.set_hexpand(false);
-        let right_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        right_box.append(&right_label);
-        right_box.set_width_request(250);
+        // ── Right pane: AI agent ──
+        let agent_panel = AgentPanel::new();
+        let right_box = agent_panel.widget().clone();
+        right_box.set_width_request(350);
 
         // ── Assemble: left | middle | right ──
         let inner_paned = gtk4::Paned::new(gtk4::Orientation::Horizontal);
@@ -222,8 +221,10 @@ impl RlineWindow {
             &search_panel,
             &git_panel,
             &status_bar,
+            &agent_panel,
         );
         self.wire_git_panel(&git_panel, &split_container);
+        self.wire_agent_panel(&agent_panel, &split_container);
 
         // Wire action buttons (needs the window reference for confirmation dialogs).
         git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
@@ -264,6 +265,7 @@ impl RlineWindow {
         imp.terminal_pane.replace(Some(terminal_pane));
         imp.status_bar.replace(Some(status_bar));
         imp.left_stack.replace(Some(stack));
+        imp.agent_panel.replace(Some(agent_panel));
 
         // ── Restore last project on startup ──
         if settings.open_last_project {
@@ -275,6 +277,9 @@ impl RlineWindow {
                     self.set_title(Some(&format!("rline - {}", path.display())));
                     if let Some(ref sb) = *imp.status_bar.borrow() {
                         sb.set_project_root(&path);
+                    }
+                    if let Some(ref ap) = *imp.agent_panel.borrow() {
+                        ap.set_project_root(&path);
                     }
                     imp.project_root.replace(Some(path.clone()));
                     self.start_git_change_watcher(&path);
@@ -296,6 +301,7 @@ impl RlineWindow {
 
     /// Wire the file browser's open callback to the editor pane, and project root
     /// changes to terminal, search, git, and status bar.
+    #[allow(clippy::too_many_arguments)]
     fn wire_file_browser(
         &self,
         file_browser: &FileBrowserPanel,
@@ -304,6 +310,7 @@ impl RlineWindow {
         search_panel: &ProjectSearchPanel,
         git_panel: &GitPanel,
         status_bar: &StatusBar,
+        agent_panel: &AgentPanel,
     ) {
         // Single-click opens file in editor
         let sc = split_container.clone();
@@ -350,11 +357,12 @@ impl RlineWindow {
             }
         });
 
-        // Project root changes update terminal + search + git + status bar + persist last project
+        // Project root changes update terminal + search + git + status bar + agent + persist
         let tp = terminal_pane.clone();
         let sp = search_panel.clone();
         let gp = git_panel.clone();
         let sb_root = status_bar.clone();
+        let ap = agent_panel.clone();
         file_browser.set_on_project_root_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -366,6 +374,7 @@ impl RlineWindow {
                 sp.set_project_root(root);
                 gp.set_project_root(root);
                 sb_root.set_project_root(root);
+                ap.set_project_root(root);
                 window.start_git_change_watcher(root);
 
                 // Persist last project path for next startup
@@ -412,6 +421,45 @@ impl RlineWindow {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("git diff failed: {e}");
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            });
+        });
+    }
+
+    /// Wire the agent panel's diff callback to the editor pane.
+    fn wire_agent_panel(&self, agent_panel: &AgentPanel, split_container: &SplitContainer) {
+        let sc = split_container.clone();
+        let project_root = self.imp().project_root.clone();
+
+        agent_panel.set_on_open_diff(move |path| {
+            let root = match project_root.borrow().clone() {
+                Some(r) => r,
+                None => return,
+            };
+            let path = path.to_path_buf();
+            let (sender, receiver) =
+                std::sync::mpsc::channel::<Result<crate::git::git_worker::FileDiff, String>>();
+
+            let path_for_thread = path.clone();
+            std::thread::spawn(move || {
+                let result = crate::git::git_worker::get_file_diff(&root, &path_for_thread, false)
+                    .map_err(|e| e.to_string());
+                let _ = sender.send(result);
+            });
+
+            let sc_clone = sc.clone();
+            glib::idle_add_local(move || match receiver.try_recv() {
+                Ok(Ok(diff)) => {
+                    if let Err(e) = sc_clone.open_diff(&path, &diff) {
+                        tracing::error!("failed to open agent diff: {e}");
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("agent diff failed: {e}");
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -611,6 +659,20 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.focus-agent (Ctrl+Shift+A)
+        let action_focus_agent = gio::ActionEntry::builder("focus-agent")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let ap = window.imp().agent_panel.borrow().clone();
+                    if let Some(ref ap) = ap {
+                        ap.focus_input();
+                    }
+                }
+            ))
+            .build();
+
         self.add_action_entries([
             action_open,
             action_save,
@@ -627,6 +689,7 @@ impl RlineWindow {
             action_find_replace,
             action_split,
             action_trigger_completion,
+            action_focus_agent,
         ]);
     }
 
