@@ -1,6 +1,6 @@
 # rline
 
-A native Linux GUI text editor with AI-assisted coding features (coming soon), built with Rust and GTK4.
+A native Linux GUI text editor with AI-assisted coding features (inline completion and a basic agent), built with Rust and GTK4.
 
 ## System Dependencies
 
