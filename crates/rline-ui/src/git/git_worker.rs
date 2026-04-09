@@ -57,7 +57,18 @@ pub struct GitStatusResult {
     pub branch_name: Option<String>,
 }
 
-/// A single diff hunk with line ranges.
+/// The origin of a single line within a diff hunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffLineOrigin {
+    /// Unchanged context line (present in both old and new).
+    Context,
+    /// Line was added in the new version.
+    Addition,
+    /// Line was deleted from the old version.
+    Deletion,
+}
+
+/// A single diff hunk with line ranges and per-line origins.
 #[derive(Debug, Clone)]
 pub struct DiffHunk {
     /// Starting line in the old file (1-based).
@@ -68,6 +79,8 @@ pub struct DiffHunk {
     pub new_start: u32,
     /// Number of lines in the new side.
     pub new_lines: u32,
+    /// Per-line origins within this hunk, in diff order.
+    pub line_origins: Vec<DiffLineOrigin>,
 }
 
 /// Diff information for a single file, including full content of both sides.
@@ -240,24 +253,37 @@ fn diff_unstaged(
     })
 }
 
-/// Extract hunk ranges from a git2 diff.
+/// Extract hunk ranges and per-line origins from a git2 diff.
 fn collect_hunks(diff: &git2::Diff<'_>) -> Result<Vec<DiffHunk>, git2::Error> {
-    let mut hunks = Vec::new();
+    // Use RefCell because diff.foreach borrows all callbacks simultaneously,
+    // but only one runs at a time (hunk callback, then its line callbacks).
+    let hunks = std::cell::RefCell::new(Vec::<DiffHunk>::new());
     diff.foreach(
         &mut |_delta, _progress| true,
         None,
         Some(&mut |_delta, hunk| {
-            hunks.push(DiffHunk {
+            hunks.borrow_mut().push(DiffHunk {
                 old_start: hunk.old_start(),
                 old_lines: hunk.old_lines(),
                 new_start: hunk.new_start(),
                 new_lines: hunk.new_lines(),
+                line_origins: Vec::new(),
             });
             true
         }),
-        None,
+        Some(&mut |_delta, _hunk, line| {
+            let origin = match line.origin() {
+                '+' => DiffLineOrigin::Addition,
+                '-' => DiffLineOrigin::Deletion,
+                _ => DiffLineOrigin::Context,
+            };
+            if let Some(hunk) = hunks.borrow_mut().last_mut() {
+                hunk.line_origins.push(origin);
+            }
+            true
+        }),
     )?;
-    Ok(hunks)
+    Ok(hunks.into_inner())
 }
 
 /// Read a blob's content from a tree entry.

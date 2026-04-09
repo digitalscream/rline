@@ -218,26 +218,28 @@ impl DiffTab {
 
     /// Build aligned content by inserting blank padding lines so both sides
     /// stay vertically aligned at hunk boundaries.
+    ///
+    /// Uses per-line origin information from git to correctly distinguish
+    /// context lines from actual additions and deletions within each hunk.
     fn build_aligned_content(diff: &FileDiff) -> AlignedContent {
+        use super::git_worker::DiffLineOrigin;
+
         let old_lines: Vec<&str> = diff.old_content.lines().collect();
         let new_lines: Vec<&str> = diff.new_content.lines().collect();
 
         let mut left_out: Vec<String> = Vec::new();
         let mut right_out: Vec<String> = Vec::new();
-        // Track which output lines are deletions, additions, or padding.
         let mut left_markers: Vec<LineKind> = Vec::new();
         let mut right_markers: Vec<LineKind> = Vec::new();
 
-        let mut old_pos: usize = 0; // Current position in old_lines (0-based).
-        let mut new_pos: usize = 0; // Current position in new_lines (0-based).
+        let mut old_pos: usize = 0;
+        let mut new_pos: usize = 0;
 
         for hunk in &diff.hunks {
             let hunk_old_start = hunk.old_start.saturating_sub(1) as usize;
             let hunk_new_start = hunk.new_start.saturating_sub(1) as usize;
-            let hunk_old_lines = hunk.old_lines as usize;
-            let hunk_new_lines = hunk.new_lines as usize;
 
-            // Emit context lines before this hunk (lines that are the same).
+            // Emit context lines before this hunk.
             while old_pos < hunk_old_start && new_pos < hunk_new_start {
                 left_out.push(old_lines.get(old_pos).unwrap_or(&"").to_string());
                 right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
@@ -247,40 +249,78 @@ impl DiffTab {
                 new_pos += 1;
             }
 
-            // Emit the hunk's deleted lines (left) and added lines (right).
-            let del_count = hunk_old_lines;
-            let add_count = hunk_new_lines;
+            // Process the hunk using per-line origins. We collect consecutive
+            // deletion/addition runs and align them with padding, while context
+            // lines go straight to both sides.
+            let mut i = 0;
+            let origins = &hunk.line_origins;
+            while i < origins.len() {
+                match origins[i] {
+                    DiffLineOrigin::Context => {
+                        left_out.push(old_lines.get(old_pos).unwrap_or(&"").to_string());
+                        right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
+                        left_markers.push(LineKind::Context);
+                        right_markers.push(LineKind::Context);
+                        old_pos += 1;
+                        new_pos += 1;
+                        i += 1;
+                    }
+                    DiffLineOrigin::Deletion | DiffLineOrigin::Addition => {
+                        // Collect a consecutive run of deletions followed by additions.
+                        let mut del_count = 0;
+                        let mut add_count = 0;
+                        let run_start = i;
 
-            // Push deleted lines on the left.
-            for _ in 0..del_count {
-                left_out.push(old_lines.get(old_pos).unwrap_or(&"").to_string());
-                left_markers.push(LineKind::Deletion);
-                old_pos += 1;
-            }
+                        // Count leading deletions.
+                        while i < origins.len() && origins[i] == DiffLineOrigin::Deletion {
+                            del_count += 1;
+                            i += 1;
+                        }
+                        // Count following additions.
+                        while i < origins.len() && origins[i] == DiffLineOrigin::Addition {
+                            add_count += 1;
+                            i += 1;
+                        }
 
-            // Push added lines on the right.
-            for _ in 0..add_count {
-                right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
-                right_markers.push(LineKind::Addition);
-                new_pos += 1;
-            }
+                        // If we started with additions (no deletions first), we
+                        // already counted them above. Handle pure-addition case.
+                        if del_count == 0 && add_count == 0 {
+                            // Shouldn't happen, but guard against it.
+                            i = run_start + 1;
+                            continue;
+                        }
 
-            // Pad the shorter side so both sides have the same number of output
-            // lines for this hunk.
-            match del_count.cmp(&add_count) {
-                std::cmp::Ordering::Greater => {
-                    for _ in 0..(del_count - add_count) {
-                        right_out.push(String::new());
-                        right_markers.push(LineKind::Padding);
+                        // Emit deleted lines on the left.
+                        for _ in 0..del_count {
+                            left_out.push(old_lines.get(old_pos).unwrap_or(&"").to_string());
+                            left_markers.push(LineKind::Deletion);
+                            old_pos += 1;
+                        }
+                        // Emit added lines on the right.
+                        for _ in 0..add_count {
+                            right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
+                            right_markers.push(LineKind::Addition);
+                            new_pos += 1;
+                        }
+
+                        // Pad the shorter side.
+                        match del_count.cmp(&add_count) {
+                            std::cmp::Ordering::Greater => {
+                                for _ in 0..(del_count - add_count) {
+                                    right_out.push(String::new());
+                                    right_markers.push(LineKind::Padding);
+                                }
+                            }
+                            std::cmp::Ordering::Less => {
+                                for _ in 0..(add_count - del_count) {
+                                    left_out.push(String::new());
+                                    left_markers.push(LineKind::Padding);
+                                }
+                            }
+                            std::cmp::Ordering::Equal => {}
+                        }
                     }
                 }
-                std::cmp::Ordering::Less => {
-                    for _ in 0..(add_count - del_count) {
-                        left_out.push(String::new());
-                        left_markers.push(LineKind::Padding);
-                    }
-                }
-                std::cmp::Ordering::Equal => {}
             }
         }
 
