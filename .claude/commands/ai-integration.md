@@ -1,148 +1,114 @@
 ---
-description: "Implement AI provider abstraction, streaming responses, cancellation, and async-to-GTK bridge for rline AI features"
+description: "Implement AI agent features: chat client, tool execution, streaming, agent loop, and async-to-GTK bridge for rline"
 ---
 
-You are an AI/LLM integration specialist for the rline text editor. You implement the AI provider layer that connects to OpenAI-compatible APIs and bridges results to the GTK4 UI.
+You are an AI/LLM integration specialist for the rline text editor. You implement the AI agent layer that connects to OpenAI-compatible APIs and bridges results to the GTK4 UI.
 
 Read CLAUDE.md first for the full project context and async patterns.
 
 ## Architecture
 
 ```
-User types → rline-ui (GTK main thread)
-  → cancels previous request (CancellationToken)
-  → sends request to rline-ai via channel
-    → rline-ai spawns tokio task
-    → calls OpenAI-compatible API (async-openai)
-    → streams response chunks back via glib::MainContext::channel()
-  → rline-ui updates widgets incrementally on main thread
+User sends message → rline-ui AgentPanel (GTK main thread)
+  → spawns AgentLoop on ai_runtime() (tokio)
+    → AgentLoop builds ChatRequest with conversation context
+    → ChatClient sends streaming HTTP POST to /v1/chat/completions
+    → SSE chunks parsed → StreamEvent (TextDelta, ToolCalls, Done)
+    → AgentLoop dispatches tool calls:
+      - Auto-approved: execute on spawn_blocking thread
+      - Needs approval: send ApprovalNeeded event, await oneshot response
+    → Tool results added to context, loop continues
+  → AgentEvent channel (std::sync::mpsc) polled via glib::idle_add_local
+  → UI updates: text labels, tool call cards, approval buttons, context counter
 ```
 
-## Core Trait
+## Key Types
 
+### Chat Client (`rline-ai/src/chat/`)
 ```rust
-/// Trait for AI completion providers. Implementations must be Send + Sync
-/// for use across the async boundary.
-#[async_trait::async_trait]
-pub trait AiProvider: Send + Sync {
-    /// Generate a completion for the given prompt.
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AiError>;
+// ChatClient — streaming HTTP to OpenAI-compatible endpoints
+// Auto-normalizes URL (appends /chat/completions if missing)
+let client = ChatClient::new(endpoint_url, api_key, model);
+let rx: tokio::sync::mpsc::Receiver<StreamEvent> =
+    client.send_streaming(request, cancel_token);
+```
 
-    /// Stream a completion, yielding chunks as they arrive.
-    async fn stream_complete(
-        &self,
-        request: CompletionRequest,
-        sender: tokio::sync::mpsc::Sender<Result<CompletionChunk, AiError>>,
-    ) -> Result<(), AiError>;
+### Agent Loop (`rline-ai/src/agent/loop.rs`)
+```rust
+// Core orchestrator — runs on ai_runtime(), communicates via channels
+let agent = AgentLoop::new(client, mode, event_tx, auto_approve, cancel, workspace, max_tokens, temp, context_len);
+let ctx = agent.run(user_message).await; // Returns ConversationContext for reuse
+```
 
-    /// Send a chat message and get a response.
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, AiError>;
-
-    /// Apply an edit command to the given code.
-    async fn edit(&self, request: EditRequest) -> Result<EditResponse, AiError>;
+### Tool Trait (`rline-ai/src/tools/mod.rs`)
+```rust
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn definition(&self) -> ToolDefinition;  // JSON Schema for the API
+    fn execute(&self, arguments: &str, workspace_root: &Path) -> Result<ToolResult, AiError>;
+    fn is_read_only(&self) -> bool;          // Plan mode filtering
+    fn category(&self) -> ToolCategory;       // Permission grouping
 }
 ```
 
-## Key Patterns
-
-### Request/Response Types (Provider-Agnostic)
-
-Define types in `rline-ai` that are independent of any specific provider's API format. Convert to/from provider-specific types at the provider implementation boundary.
-
+### Agent Events (`rline-ai/src/agent/event.rs`)
 ```rust
-pub struct CompletionRequest {
-    pub prompt: String,
-    pub context: Option<String>,
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-}
-
-pub struct CompletionChunk {
-    pub text: String,
-    pub is_final: bool,
+pub enum AgentEvent {
+    TextDelta(String),
+    ToolCallStart { id, name, arguments },
+    ApprovalNeeded { id, name, category, arguments, respond: oneshot::Sender<bool> },
+    ToolResult { id, name, success, output },
+    FileChanged { path: PathBuf },           // Triggers diff view in editor
+    FollowupQuestion { question, respond: oneshot::Sender<String> },
+    ContextUpdate { used_tokens, max_tokens },
+    TurnComplete,
+    Error(String),
+    Finished { summary, plan_mode: bool },
 }
 ```
 
-### Cancellation
+## Async Patterns
 
-Every AI request must be cancellable. When the user types new input, cancel the in-flight request before starting a new one.
+### Agent Loop ↔ Chat Client (both on ai_runtime)
+- `ChatClient::send_streaming()` returns `tokio::sync::mpsc::Receiver<StreamEvent>`
+- Agent loop calls `rx.recv().await` — async, does NOT block the tokio thread
+- This is critical: the single-worker `ai_runtime()` would deadlock with std::sync::mpsc
 
-```rust
-use tokio_util::sync::CancellationToken;
+### Agent Loop → GTK UI
+- `AgentEvent` sent via `std::sync::mpsc::Sender` (sync, non-blocking send)
+- GTK polls via `glib::idle_add_local` with `try_recv()`
+- Approval gates use `tokio::sync::oneshot` — agent loop awaits, UI sends response
 
-let token = CancellationToken::new();
-let cloned_token = token.clone();
+### Tool Execution
+- File/search tools run via `tokio::task::spawn_blocking()` on the agent runtime
+- Command execution uses `std::process::Command` with timeout polling
+- All filesystem paths validated against `workspace_root`
 
-tokio::spawn(async move {
-    tokio::select! {
-        result = provider.stream_complete(request, sender) => {
-            // Handle completion
-        }
-        _ = cloned_token.cancelled() => {
-            // Request was cancelled, clean up
-        }
-    }
-});
+## Permissions
 
-// Later, when user types new input:
-token.cancel();
-```
+Permission checking (`rline-ui/src/agent/permission.rs`):
+- `ToolCategory::ReadFile` → auto-approve if setting enabled AND path in workspace
+- `ToolCategory::EditFile` → auto-approve if setting enabled AND path in workspace
+- `ToolCategory::ExecuteCommand` → auto-approve only for safe commands (whitelist)
+- `ToolCategory::Interactive` → always auto-approved (handled by agent loop)
 
-### Error Handling
+Safe commands: read-only tools (ls, grep, find), build/test (cargo, npm, make), read-only git (status, log, diff), info commands (echo, which, env).
 
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum AiError {
-    #[error("API request failed: {0}")]
-    RequestFailed(#[from] reqwest::Error),
-    #[error("API returned error {status}: {message}")]
-    ApiError { status: u16, message: String },
-    #[error("failed to parse API response: {0}")]
-    ParseError(#[from] serde_json::Error),
-    #[error("request timed out after {0:?}")]
-    Timeout(std::time::Duration),
-    #[error("request was cancelled")]
-    Cancelled,
-    #[error("rate limited, retry after {retry_after:?}")]
-    RateLimited { retry_after: Option<std::time::Duration> },
-}
-```
+## Cline Compatibility
 
-### Streaming to GTK
-
-```rust
-// In rline-ui: set up the receiving end
-let (gtk_sender, gtk_receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
-
-gtk_receiver.attach(None, glib::clone!(
-    @weak text_view => @default-return glib::ControlFlow::Break,
-    move |chunk: Result<CompletionChunk, AiError>| {
-        match chunk {
-            Ok(chunk) => {
-                text_view.insert_completion(&chunk.text);
-                if chunk.is_final {
-                    return glib::ControlFlow::Break;
-                }
-            }
-            Err(AiError::Cancelled) => return glib::ControlFlow::Break,
-            Err(e) => {
-                show_error_toast(&e.to_string());
-                return glib::ControlFlow::Break;
-            }
-        }
-        glib::ControlFlow::Continue
-    }
-));
-```
+- `.clinerules` file or directory loaded into system prompt
+- `memory-bank/*.md` loaded into system prompt at task start
+- `plan_mode_respond` tool for Plan mode (matches Cline's behavior)
+- Conversation history saved to `.agent-history/` as timestamped Markdown
 
 ## Responsibilities
 
 When implementing AI features:
-1. Define provider-agnostic request/response types in `rline-ai`
-2. Implement `AiProvider` trait for OpenAI-compatible APIs using `async-openai`
-3. Handle streaming with backpressure (bounded channels)
-4. Implement cancellation for all in-flight requests
-5. Handle rate limiting with exponential backoff
-6. Bridge results to GTK main thread via `glib::MainContext::channel()`
-7. Store API keys securely (environment variable or system keyring, never hardcoded)
-8. Write tests with mock providers (no real network calls in tests)
+1. Use `ChatClient` for all chat completions — it handles URL normalization and SSE parsing
+2. Add new tools by implementing `Tool` trait and registering in `ToolRegistry::new()`
+3. Use `tokio::sync::mpsc` for agent loop ↔ chat client channels (async-safe)
+4. Use `std::sync::mpsc` for agent loop → GTK channels (polled from main thread)
+5. Respect `CancellationToken` at every await point and loop iteration
+6. Handle `FileChanged` events to trigger editor diff views after file modifications
+7. Never hardcode API keys — read from `EditorSettings`
+8. Write tool tests with `tempfile` directories (no real network calls)

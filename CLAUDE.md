@@ -60,8 +60,12 @@ Requires Rust 1.85 or later.
 | `git2` (0.20) | Git repository operations (status, blame, diff, staging) |
 | `tree-sitter` / `tree-sitter-highlight` (0.25) | Incremental syntax parsing (14 language grammars) |
 | `pango` (0.21) | Text layout and rendering |
+| `reqwest` (0.12) | HTTP client for AI API calls (streaming SSE) |
+| `regex` (1) | Regex search in tools and code definition extraction |
+| `bytes` (1) | Byte buffer handling for streaming responses |
+| `futures-core` (0.3) | Stream trait for reqwest byte streams |
 
-**Planned but not yet used**: `ropey` (rope data structure), `async-openai` (AI API client).
+**Planned but not yet used**: `ropey` (rope data structure).
 
 ## Workspace Architecture
 
@@ -86,9 +90,36 @@ rline/
         settings.rs        # EditorSettings (theme, font sizes, behavior toggles)
         syntax_theme.rs    # Rich TextMate scope resolution for imported themes
         vscode_import.rs   # VS Code theme discovery and conversion to GtkSourceView XML
-    rline-ai/              # AI provider abstraction (placeholder — AiProvider trait only)
+    rline-ai/              # AI completion client + agentic tool-use engine
       src/
-        lib.rs
+        lib.rs             # Re-exports, module declarations
+        client.rs          # CompletionClient — FIM inline completion (v1/completions)
+        error.rs           # AiError enum (HTTP, API, cancelled, tool, I/O, regex)
+        runtime.rs         # Dedicated single-thread tokio runtime (ai_runtime())
+        types.rs           # CompletionRequest/Response for FIM
+        chat/
+          mod.rs
+          client.rs        # ChatClient — streaming SSE to /v1/chat/completions
+          stream.rs        # SSE parser, ToolCallAccumulator for incremental parsing
+          types.rs         # ChatMessage, ToolCall, ToolDefinition, ChatRequest, streaming deltas
+        agent/
+          mod.rs
+          context.rs       # ConversationContext — message history, token tracking, truncation
+          event.rs         # AgentEvent enum (TextDelta, ToolCall, Approval, FileChanged, etc.)
+          loop.rs          # AgentLoop — core multi-turn orchestrator with Plan/Act modes
+        tools/
+          mod.rs           # Tool trait, ToolRegistry, ToolCategory, ToolResult
+          definitions.rs   # JSON Schema builder macro
+          read_file.rs     # Read file contents with optional line range
+          write_to_file.rs # Create/overwrite files
+          replace_in_file.rs # SEARCH/REPLACE block editing
+          list_files.rs    # Recursive directory listing
+          search_files.rs  # Regex search across project files
+          execute_command.rs # Shell command execution with timeout
+          list_code_definition_names.rs # Regex-based code structure extraction
+          ask_followup_question.rs # Interactive: ask user for clarification
+          attempt_completion.rs    # Interactive: signal task complete (Act mode only)
+          plan_mode_respond.rs     # Interactive: present plan (Plan mode only)
     rline-syntax/          # Tree-sitter integration — incremental syntax highlighting
       src/
         lib.rs             # Crate-level docs, re-exports
@@ -131,6 +162,12 @@ rline/
           git_status_row.rs # Individual file status row widget
           git_worker.rs    # Background git ops: status, diff, blame, staging, commit
           diff_tab.rs      # Side-by-side diff view with hunk highlighting
+        agent/
+          mod.rs
+          agent_panel.rs   # Right-pane chat UI: mode selector, message area, input, context counter
+          message_widget.rs # Widget factories for user/AI/tool/completion/error/plan messages
+          markdown.rs      # Markdown-to-Pango markup converter for AI responses
+          permission.rs    # Auto-approve policy: safe command detection, workspace path checks
         terminal/
           mod.rs
           terminal_pane.rs # Tabbed notebook of terminal instances
@@ -145,7 +182,7 @@ Dependency direction flows inward: `rline-ui` → `rline-core`, `rline-config`, 
 Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 - **Left**: `gtk4::Stack` with three tabs (Files, Git, Search)
 - **Middle**: Vertical split — editor tabs (top) + terminal tabs (bottom)
-- **Right**: AI agent placeholder
+- **Right**: AI agent chat panel (Plan/Act mode selector, message history, input area)
 - **Bottom**: Status bar (repo name, branch, git blame)
 
 ### File Browser (left pane, "Files" tab)
@@ -198,15 +235,47 @@ Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 - Modal dialog with fuzzy subsequence matching on filenames
 - File index collected from project root (capped at 10,000 files)
 
+### AI Agent (right pane, Ctrl+Shift+A)
+- Agentic tool-use chat panel modeled after the Cline VS Code extension
+- **Two modes**: Plan (read-only analysis) and Act (full execution), selectable via dropdown
+- **Plan mode**: read-only tools only (`read_file`, `list_files`, `search_files`, `list_code_definition_names`, `ask_followup_question`, `plan_mode_respond`). Model calls `plan_mode_respond` to present its plan; user then switches to Act mode.
+- **Act mode**: all tools including file writes, command execution, and `attempt_completion`
+- **10 built-in tools**: `read_file`, `write_to_file`, `replace_in_file`, `list_files`, `search_files`, `execute_command`, `list_code_definition_names`, `ask_followup_question`, `attempt_completion`, `plan_mode_respond`
+- **Streaming responses**: text displayed as it arrives via SSE parsing, markdown rendered on completion
+- **Permission system**: auto-approve by category (read files, edit files, safe commands) with workspace boundary enforcement. Unsafe commands always require approval.
+- **Safe command detection**: whitelist of read-only/build/test commands matching Cline's classification; shell operators (`|`, `;`, `>`, `&`) force manual approval
+- **Tool call UI**: collapsible cards showing tool name + key argument (e.g. file path, command), approve/deny buttons for non-auto-approved calls
+- **Follow-up questions**: multi-line text area with Enter to submit, Shift+Enter for newline
+- **Context management**: token-aware truncation removing oldest complete exchanges; live counter ("12k / 128k") in header
+- **Conversation persistence**: context preserved across sends and mode switches within the same task; "New Task" button resets
+- **Conversation history**: saved to `.agent-history/` directory as timestamped Markdown files, updated after each agent run
+- **Diff view**: file edits automatically open side-by-side diff in the editor (via git unstaged diff)
+- **Cline compatibility**: loads `.clinerules` (file or directory) and `memory-bank/*.md` into the system prompt
+- **OpenAI-compatible API**: works with any local model server (llama.cpp, vLLM, Ollama, etc.) that supports `/v1/chat/completions` with tool/function calling
+- All AI operations run on dedicated tokio runtime (`ai_runtime()`) — never blocks GTK main thread
+
 ### Settings (hamburger menu → Settings)
-- Theme (dropdown of all sourceview5 schemes + imported VS Code themes)
-- Editor font family and size
-- Terminal font size
-- Tab width, insert spaces, show line numbers, word wrap
-- Tree-sitter highlighting toggle
+Three tabs: **Editor**, **Completion**, **Agent**.
+
+**Editor tab:**
+- Theme (dropdown of all sourceview5 schemes + imported VS Code / Zed themes)
+- Editor font family and size, letter spacing, line height, font hinting
+- Tab width, insert spaces
+- Terminal font family and size
 - Open last project on startup (toggle)
-- Search auto-expand threshold (spinner)
-- MRU tab cycle depth
+- Search auto-expand threshold, Ctrl+Tab cycle depth
+- Tree-sitter highlighting toggle
+
+**Completion tab (inline FIM):**
+- Enable/disable, endpoint URL, API key, model
+- Trigger mode (automatic/manual/both), debounce, max tokens, context lines, temperature
+
+**Agent tab:**
+- Endpoint URL (auto-appends `/chat/completions` if needed), API key, model
+- Max tokens, temperature, context length (tokens)
+- Command timeout (seconds)
+- Auto-approve permissions (Act mode only): read files, edit files, execute safe commands
+
 - Persisted as JSON at `~/.config/rline/settings.json`
 - Uses `#[serde(default)]` for forward-compatible deserialization
 
@@ -240,6 +309,7 @@ Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 | Ctrl+Shift+G | Show git panel |
 | Ctrl+Shift+E | Show files panel |
 | Ctrl+Shift+W | Focus terminal |
+| Ctrl+Shift+A | Focus agent panel |
 
 ### Startup Behavior
 - Last opened project restored automatically (if enabled in settings)
@@ -399,9 +469,14 @@ mod tests {
 | Cursor / Caret | The insertion point in a document |
 | Selection | A range of text (anchor + head positions) |
 | Provider | An AI backend (OpenAI-compatible, Claude, local model) |
-| Completion | AI-generated code suggestion |
+| Completion | AI-generated code suggestion (inline FIM) |
 | Command | An editor action (not a shell command) |
 | Chrome | Application UI surrounding the editor (sidebars, headers, tab bars) |
+| Plan Mode | Agent read-only mode: analyze code, present plan via `plan_mode_respond` |
+| Act Mode | Agent execution mode: full tool access, file writes, command execution |
+| Tool Call | A function the AI model requests to execute (read_file, execute_command, etc.) |
+| Agent Loop | The multi-turn cycle: send context → stream response → execute tools → repeat |
+| Context | The full conversation history (system prompt + messages) sent to the AI model |
 
 ## Key Rules (NON-NEGOTIABLE)
 
