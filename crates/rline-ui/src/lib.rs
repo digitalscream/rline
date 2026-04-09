@@ -1,5 +1,6 @@
 //! rline-ui — GTK4 widgets, editor view, panels, and theming for rline.
 
+pub mod agent;
 mod app;
 pub mod editor;
 pub mod error;

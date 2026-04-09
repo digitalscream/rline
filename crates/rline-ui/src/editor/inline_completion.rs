@@ -192,6 +192,10 @@ impl InlineCompletion {
         self.buffer
             .apply_tag(&self.ghost_tag, &remaining_start, &remaining_end);
 
+        // Keep ghost tag priority highest so syntax tags don't override it.
+        let max_priority = self.buffer.tag_table().size() - 1;
+        self.ghost_tag.set_priority(max_priority);
+
         self.suppressing.set(false);
 
         // Do NOT call highlight_full() here — it would overwrite the ghost
@@ -310,6 +314,11 @@ impl InlineCompletion {
         end.forward_chars(text.chars().count() as i32);
         self.buffer.move_mark(&self.end_mark, &end);
         self.buffer.apply_tag(&self.ghost_tag, &start, &end);
+
+        // Ensure the ghost tag has the highest priority so its foreground
+        // color is not overridden by syntax highlighting tags.
+        let max_priority = self.buffer.tag_table().size() - 1;
+        self.ghost_tag.set_priority(max_priority);
 
         // Restore cursor to before the ghost text.
         let cursor_restore = self.buffer.iter_at_mark(&self.start_mark);

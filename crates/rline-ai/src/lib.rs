@@ -1,12 +1,21 @@
-//! rline-ai — AI completion client for code editors.
+//! rline-ai — AI completion and agentic tool-use client for code editors.
 //!
-//! Provides an HTTP client for OpenAI-compatible `/v1/completions` endpoints
-//! with FIM (Fill-in-the-Middle) support via the `suffix` request field.
+//! Provides HTTP clients for OpenAI-compatible endpoints:
+//! - [`CompletionClient`] for `/v1/completions` (FIM inline completion)
+//! - [`chat::ChatClient`] for `/v1/chat/completions` (agentic tool use)
+//!
+//! The [`agent`] module contains the core agent loop that drives
+//! multi-turn tool-use conversations. The [`tools`] module defines
+//! the tool trait and built-in tool implementations.
+//!
 //! Async operations run on a dedicated tokio runtime to avoid blocking GTK.
 
+pub mod agent;
+pub mod chat;
 pub mod client;
 pub mod error;
 pub mod runtime;
+pub mod tools;
 pub mod types;
 
 pub use client::CompletionClient;

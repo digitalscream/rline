@@ -86,6 +86,38 @@ pub struct EditorSettings {
     /// Trigger mode: `"automatic"`, `"manual"`, or `"both"`.
     #[serde(default = "default_ai_trigger_mode")]
     pub ai_trigger_mode: String,
+
+    // ── AI Agent ──
+    /// Full URL to the chat completions endpoint for the agent.
+    #[serde(default = "default_agent_endpoint_url")]
+    pub agent_endpoint_url: String,
+    /// Bearer token for the agent API (empty = no auth; if empty, falls back to `ai_api_key`).
+    #[serde(default)]
+    pub agent_api_key: String,
+    /// Model identifier for agent requests.
+    #[serde(default)]
+    pub agent_model: String,
+    /// Maximum tokens to generate per agent response.
+    #[serde(default = "default_agent_max_tokens")]
+    pub agent_max_tokens: u32,
+    /// Sampling temperature for agent responses.
+    #[serde(default)]
+    pub agent_temperature: f64,
+    /// Auto-approve read-only tool calls (read_file, list_files, search_files, etc.).
+    #[serde(default = "default_true")]
+    pub agent_auto_approve_read: bool,
+    /// Auto-approve file edit tool calls (write_to_file, replace_in_file).
+    #[serde(default)]
+    pub agent_auto_approve_edit: bool,
+    /// Auto-approve command execution tool calls.
+    #[serde(default)]
+    pub agent_auto_approve_command: bool,
+    /// Timeout in seconds for agent command execution.
+    #[serde(default = "default_agent_command_timeout")]
+    pub agent_command_timeout_secs: u32,
+    /// Maximum context length in tokens for the agent model.
+    #[serde(default = "default_agent_context_length")]
+    pub agent_context_length: u32,
 }
 
 impl Default for EditorSettings {
@@ -119,6 +151,16 @@ impl Default for EditorSettings {
             ai_max_lines: default_ai_max_lines(),
             ai_temperature: 0.0,
             ai_trigger_mode: default_ai_trigger_mode(),
+            agent_endpoint_url: default_agent_endpoint_url(),
+            agent_api_key: String::new(),
+            agent_model: String::new(),
+            agent_max_tokens: default_agent_max_tokens(),
+            agent_temperature: 0.0,
+            agent_auto_approve_read: true,
+            agent_auto_approve_edit: false,
+            agent_auto_approve_command: false,
+            agent_command_timeout_secs: default_agent_command_timeout(),
+            agent_context_length: default_agent_context_length(),
         }
     }
 }
@@ -176,6 +218,26 @@ fn default_ai_max_lines() -> u32 {
 /// Default trigger mode for AI completion.
 fn default_ai_trigger_mode() -> String {
     "automatic".to_owned()
+}
+
+/// Default agent endpoint URL.
+fn default_agent_endpoint_url() -> String {
+    "http://localhost:8080/v1/chat/completions".to_owned()
+}
+
+/// Default max tokens for agent responses.
+fn default_agent_max_tokens() -> u32 {
+    4096
+}
+
+/// Default command execution timeout for the agent.
+fn default_agent_command_timeout() -> u32 {
+    30
+}
+
+/// Default context length in tokens for the agent model.
+fn default_agent_context_length() -> u32 {
+    128_000
 }
 
 impl EditorSettings {
@@ -341,6 +403,16 @@ mod tests {
             ai_max_lines: 5,
             ai_temperature: 0.2,
             ai_trigger_mode: "both".to_owned(),
+            agent_endpoint_url: "http://example.com/v1/chat/completions".to_owned(),
+            agent_api_key: "agent-key".to_owned(),
+            agent_model: "qwen-2.5".to_owned(),
+            agent_max_tokens: 8192,
+            agent_temperature: 0.1,
+            agent_auto_approve_read: true,
+            agent_auto_approve_edit: true,
+            agent_auto_approve_command: false,
+            agent_command_timeout_secs: 60,
+            agent_context_length: 256_000,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

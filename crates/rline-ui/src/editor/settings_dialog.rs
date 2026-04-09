@@ -30,7 +30,7 @@ impl SettingsDialog {
             .default_height(620)
             .build();
 
-        // ── Notebook with two pages ──
+        // ── Notebook with three pages ──
         let notebook = gtk4::Notebook::new();
         notebook.set_vexpand(true);
 
@@ -44,6 +44,11 @@ impl SettingsDialog {
         // ════════════════════════════════════════════════════════════
         let completion_page = Self::build_completion_page(&settings);
 
+        // ════════════════════════════════════════════════════════════
+        //  Tab 3 — Agent
+        // ════════════════════════════════════════════════════════════
+        let agent_page = Self::build_agent_page(&settings);
+
         notebook.append_page(
             &editor_page.scrolled,
             Some(&gtk4::Label::new(Some("Editor"))),
@@ -52,6 +57,7 @@ impl SettingsDialog {
             &completion_page.scrolled,
             Some(&gtk4::Label::new(Some("Completion"))),
         );
+        notebook.append_page(&agent_page.scrolled, Some(&gtk4::Label::new(Some("Agent"))));
 
         // ── Buttons ──
         let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -87,6 +93,7 @@ impl SettingsDialog {
         let do_apply = {
             let ep = editor_page.clone();
             let cp = completion_page.clone();
+            let ap = agent_page.clone();
             let on_apply = on_apply.clone();
             Rc::new(move || {
                 tracing::info!(
@@ -124,6 +131,17 @@ impl SettingsDialog {
                     ai_context_lines_after: cp.context_after_spin.value() as u32,
                     ai_max_lines: cp.max_lines_spin.value() as u32,
                     ai_temperature: cp.temperature_spin.value(),
+                    // Agent page
+                    agent_endpoint_url: ap.endpoint_entry.text().to_string(),
+                    agent_api_key: ap.api_key_entry.text().to_string(),
+                    agent_model: ap.model_entry.text().to_string(),
+                    agent_max_tokens: ap.max_tokens_spin.value() as u32,
+                    agent_temperature: ap.temperature_spin.value(),
+                    agent_auto_approve_read: ap.auto_approve_read_switch.is_active(),
+                    agent_auto_approve_edit: ap.auto_approve_edit_switch.is_active(),
+                    agent_auto_approve_command: ap.auto_approve_command_switch.is_active(),
+                    agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
+                    agent_context_length: ap.context_length_spin.value() as u32,
                     ..existing
                 };
 
@@ -471,6 +489,126 @@ impl SettingsDialog {
             context_after_spin,
             max_lines_spin,
             temperature_spin,
+        }
+    }
+
+    // ── Agent page ─────────────────────────────────────────────────
+
+    fn build_agent_page(settings: &EditorSettings) -> AgentPageWidgets {
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_top(16);
+        content.set_margin_bottom(16);
+        content.set_margin_start(16);
+        content.set_margin_end(16);
+
+        // Endpoint URL
+        let endpoint_row = Self::make_row("Endpoint URL");
+        let endpoint_entry = gtk4::Entry::builder()
+            .text(&settings.agent_endpoint_url)
+            .hexpand(true)
+            .build();
+        endpoint_row.append(&endpoint_entry);
+
+        // API Key
+        let api_key_row = Self::make_row("API Key");
+        let api_key_entry = gtk4::PasswordEntry::builder()
+            .show_peek_icon(true)
+            .hexpand(true)
+            .build();
+        api_key_entry.set_text(&settings.agent_api_key);
+        api_key_row.append(&api_key_entry);
+
+        // Model
+        let model_row = Self::make_row("Model");
+        let model_entry = gtk4::Entry::builder()
+            .text(&settings.agent_model)
+            .placeholder_text("e.g. qwen-2.5, deepseek-r1")
+            .hexpand(true)
+            .build();
+        model_row.append(&model_entry);
+
+        // Max Tokens
+        let max_tokens_row = Self::make_row("Max Tokens");
+        let max_tokens_spin = gtk4::SpinButton::with_range(256.0, 32768.0, 256.0);
+        max_tokens_spin.set_value(settings.agent_max_tokens as f64);
+        max_tokens_row.append(&max_tokens_spin);
+
+        // Temperature
+        let temperature_row = Self::make_row("Temperature");
+        let temperature_spin = gtk4::SpinButton::with_range(0.0, 2.0, 0.1);
+        temperature_spin.set_digits(1);
+        temperature_spin.set_value(settings.agent_temperature);
+        temperature_row.append(&temperature_spin);
+
+        // Context Length
+        let context_row = Self::make_row("Context Length (tokens)");
+        let context_length_spin = gtk4::SpinButton::with_range(4096.0, 1_048_576.0, 4096.0);
+        context_length_spin.set_value(settings.agent_context_length as f64);
+        context_row.append(&context_length_spin);
+
+        // Command Timeout
+        let timeout_row = Self::make_row("Command Timeout (seconds)");
+        let command_timeout_spin = gtk4::SpinButton::with_range(5.0, 600.0, 5.0);
+        command_timeout_spin.set_value(settings.agent_command_timeout_secs as f64);
+        timeout_row.append(&command_timeout_spin);
+
+        // ── Auto-approve section ──
+        let approve_header = gtk4::Label::new(None);
+        approve_header.set_markup("<b>Auto-approve Permissions (Act mode only)</b>");
+        approve_header.set_halign(gtk4::Align::Start);
+        approve_header.set_margin_top(8);
+
+        // Auto-approve read
+        let approve_read_row = Self::make_row("Read files");
+        let auto_approve_read_switch = gtk4::Switch::new();
+        auto_approve_read_switch.set_active(settings.agent_auto_approve_read);
+        auto_approve_read_switch.set_valign(gtk4::Align::Center);
+        approve_read_row.append(&auto_approve_read_switch);
+
+        // Auto-approve edit
+        let approve_edit_row = Self::make_row("Edit files");
+        let auto_approve_edit_switch = gtk4::Switch::new();
+        auto_approve_edit_switch.set_active(settings.agent_auto_approve_edit);
+        auto_approve_edit_switch.set_valign(gtk4::Align::Center);
+        approve_edit_row.append(&auto_approve_edit_switch);
+
+        // Auto-approve command
+        let approve_command_row = Self::make_row("Execute safe commands");
+        let auto_approve_command_switch = gtk4::Switch::new();
+        auto_approve_command_switch.set_active(settings.agent_auto_approve_command);
+        auto_approve_command_switch.set_valign(gtk4::Align::Center);
+        approve_command_row.append(&auto_approve_command_switch);
+
+        content.append(&endpoint_row);
+        content.append(&api_key_row);
+        content.append(&model_row);
+        content.append(&max_tokens_row);
+        content.append(&temperature_row);
+        content.append(&context_row);
+        content.append(&timeout_row);
+        content.append(&approve_header);
+        content.append(&approve_read_row);
+        content.append(&approve_edit_row);
+        content.append(&approve_command_row);
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .child(&content)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        AgentPageWidgets {
+            scrolled,
+            endpoint_entry,
+            api_key_entry,
+            model_entry,
+            max_tokens_spin,
+            temperature_spin,
+            context_length_spin,
+            command_timeout_spin,
+            auto_approve_read_switch,
+            auto_approve_edit_switch,
+            auto_approve_command_switch,
         }
     }
 
@@ -933,4 +1071,20 @@ impl CompletionPageWidgets {
             _ => "automatic".to_owned(),
         }
     }
+}
+
+/// Holds references to agent-page widgets for reading values at apply time.
+#[derive(Clone)]
+struct AgentPageWidgets {
+    scrolled: gtk4::ScrolledWindow,
+    endpoint_entry: gtk4::Entry,
+    api_key_entry: gtk4::PasswordEntry,
+    model_entry: gtk4::Entry,
+    max_tokens_spin: gtk4::SpinButton,
+    temperature_spin: gtk4::SpinButton,
+    context_length_spin: gtk4::SpinButton,
+    command_timeout_spin: gtk4::SpinButton,
+    auto_approve_read_switch: gtk4::Switch,
+    auto_approve_edit_switch: gtk4::Switch,
+    auto_approve_command_switch: gtk4::Switch,
 }
