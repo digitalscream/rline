@@ -1,5 +1,6 @@
 //! Editor pane — tabbed GtkSourceView buffers with optional vertical split.
 
+mod bracket_completion;
 mod editor_pane;
 mod find_bar;
 mod inline_completion;

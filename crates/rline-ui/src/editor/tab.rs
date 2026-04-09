@@ -10,6 +10,7 @@ use sourceview5::prelude::*;
 use rline_config::EditorSettings;
 use rline_core::LineIndex;
 
+use crate::editor::bracket_completion::BracketCompletion;
 use crate::editor::find_bar::FindBar;
 use crate::editor::inline_completion::InlineCompletion;
 use crate::editor::syntax_highlighter::SyntaxHighlighter;
@@ -40,6 +41,8 @@ pub struct EditorTab {
     find_bar: FindBar,
     /// AI inline completion handler (None when AI is disabled).
     inline_completion: Rc<RefCell<Option<InlineCompletion>>>,
+    /// Automatic bracket/quote pair completion (kept alive for the key controller).
+    _bracket_completion: BracketCompletion,
 }
 
 impl EditorTab {
@@ -140,6 +143,10 @@ impl EditorTab {
             None
         };
 
+        // Bracket completion must be added after InlineCompletion so that
+        // ghost-text dismissal takes priority in the Capture phase.
+        let bracket_completion = BracketCompletion::new(&view, &buffer);
+
         Self {
             overlay,
             view,
@@ -152,6 +159,7 @@ impl EditorTab {
             use_treesitter: settings.use_treesitter,
             find_bar,
             inline_completion: Rc::new(RefCell::new(inline_completion)),
+            _bracket_completion: bracket_completion,
         }
     }
 
