@@ -198,9 +198,16 @@ impl InlineCompletion {
 
         self.suppressing.set(false);
 
-        // Do NOT call highlight_full() here — it would overwrite the ghost
-        // tag on remaining lines.  Syntax colors for accepted text will be
-        // applied when the last ghost line is accepted via accept_completion().
+        // Re-highlight the full buffer so accepted text gets syntax colors.
+        // The ghost tag on remaining lines survives because highlight_full()
+        // only touches ts-* tags, and we re-assert ghost priority afterwards.
+        if let Some(ref hl) = *self.highlighter.borrow() {
+            hl.highlight_full();
+            // Re-assert ghost tag priority — highlight_full() may have added
+            // tags that shifted priorities.
+            let max_priority = self.buffer.tag_table().size() - 1;
+            self.ghost_tag.set_priority(max_priority);
+        }
     }
 
     /// Dismiss the current ghost text (remove it from the buffer).
