@@ -367,17 +367,31 @@ impl AgentPanel {
                     max_tokens,
                     temperature,
                 ),
-                None => AgentLoop::new(
-                    client,
-                    mode,
-                    event_tx,
-                    auto_approve,
-                    cancel,
-                    ws_root2,
-                    max_tokens,
-                    temperature,
-                    max_context,
-                ),
+                None => {
+                    // Load custom system prompt from config dir if it exists.
+                    // Replace [current_working_directory] placeholder with the
+                    // actual workspace root so users can reference it in their prompt.
+                    let custom_prompt = rline_config::paths::system_prompt_path()
+                        .ok()
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| {
+                            s.replace("[current_working_directory]", &ws_root2.to_string_lossy())
+                        });
+
+                    AgentLoop::new(
+                        client,
+                        mode,
+                        event_tx,
+                        auto_approve,
+                        cancel,
+                        ws_root2,
+                        max_tokens,
+                        temperature,
+                        max_context,
+                        custom_prompt,
+                    )
+                }
             };
             let ctx = agent.run(user_message).await;
             // Save conversation history to .agent-history/ (creates or updates file).

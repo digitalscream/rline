@@ -8,6 +8,21 @@ use crate::chat::types::{ChatMessage, ChatRequest, Role, ToolDefinition};
 /// Approximate characters per token (conservative estimate for English text).
 const CHARS_PER_TOKEN: usize = 4;
 
+/// Default agent system prompt used when no custom prompt file is configured.
+pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant integrated into the rline text editor. You help users with software engineering tasks by reading files, writing code, searching, and executing commands.
+
+## Guidelines
+1. Always read files before modifying them to understand the existing code.
+2. Use search_files to find relevant code across the project.
+3. Use list_files and list_code_definition_names to understand project structure.
+4. When editing files, use replace_in_file for targeted changes. Use write_to_file only for new files or complete rewrites.
+5. Explain your reasoning before making changes.
+6. After making changes, verify them if possible (e.g., run tests, check compilation).
+7. Ask follow-up questions only when the task is genuinely ambiguous. Do not ask unnecessary clarifying questions.
+
+## File Paths
+All file paths should be relative to the workspace root unless they are absolute paths."#;
+
 /// Manages the conversation history for an agent session.
 #[derive(Debug, Clone)]
 pub struct ConversationContext {
@@ -208,9 +223,15 @@ fn find_exchange_end(messages: &[ChatMessage]) -> usize {
 ///
 /// Automatically discovers and includes `.clinerules` and `memory-bank`
 /// content from the workspace root, matching Cline's behavior.
-pub fn build_system_prompt(workspace_root: &str, mode: &str) -> String {
+pub fn build_system_prompt(
+    workspace_root: &str,
+    mode: &str,
+    custom_prompt: Option<&str>,
+) -> String {
+    let base = custom_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
+
     let mut prompt = format!(
-        r#"You are an AI coding assistant integrated into the rline text editor. You help users with software engineering tasks by reading files, writing code, searching, and executing commands.
+        r#"{base}
 
 ## Environment
 - Workspace root: {workspace_root}
@@ -219,20 +240,8 @@ pub fn build_system_prompt(workspace_root: &str, mode: &str) -> String {
 ## Mode Behavior
 - In PLAN mode: You can only read files, list directories, search, and analyze code. You CANNOT modify files or execute commands. When you have finished your analysis, you MUST call `plan_mode_respond` with your complete plan. Do NOT attempt to execute the plan yourself — the user will switch to Act mode to do that.
 - In ACT mode: You can read, write, and modify files, execute commands, and perform all available actions. When the task is done, call `attempt_completion` with a summary.
-
-## Guidelines
-1. Always read files before modifying them to understand the existing code.
-2. Use search_files to find relevant code across the project.
-3. Use list_files and list_code_definition_names to understand project structure.
-4. When editing files, use replace_in_file for targeted changes. Use write_to_file only for new files or complete rewrites.
-5. Explain your reasoning before making changes.
-6. After making changes, verify them if possible (e.g., run tests, check compilation).
-7. Ask follow-up questions only when the task is genuinely ambiguous. Do not ask unnecessary clarifying questions.
-8. In PLAN mode: call `plan_mode_respond` when your plan is ready.
-9. In ACT mode: call `attempt_completion` when the task is done.
-
-## File Paths
-All file paths should be relative to the workspace root unless they are absolute paths."#
+- In PLAN mode: call `plan_mode_respond` when your plan is ready.
+- In ACT mode: call `attempt_completion` when the task is done."#
     );
 
     let root = std::path::Path::new(workspace_root);
@@ -360,9 +369,28 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_contains_workspace() {
-        let prompt = build_system_prompt("/home/user/project", "ACT");
+        let prompt = build_system_prompt("/home/user/project", "ACT", None);
         assert!(prompt.contains("/home/user/project"));
         assert!(prompt.contains("ACT"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_custom_overrides_default() {
+        let custom = "You are a helpful pirate assistant.";
+        let prompt = build_system_prompt("/tmp/proj", "PLAN", Some(custom));
+        assert!(
+            prompt.contains(custom),
+            "custom prompt text should appear in output"
+        );
+        assert!(
+            !prompt.contains("You are an AI coding assistant"),
+            "default prompt text should not appear when custom is provided"
+        );
+        assert!(
+            prompt.contains("/tmp/proj"),
+            "workspace root should still appear"
+        );
+        assert!(prompt.contains("PLAN"), "mode should still appear");
     }
 
     #[test]

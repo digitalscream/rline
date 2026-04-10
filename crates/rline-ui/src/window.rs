@@ -956,17 +956,28 @@ impl RlineWindow {
         let imp = self.imp();
         let split_container = imp.split_container.borrow().clone();
         let terminal_pane = imp.terminal_pane.borrow().clone();
-        let dialog = crate::editor::SettingsDialog::new(self.upcast_ref(), move |settings| {
-            // Always update app-wide chrome, even if no editor tabs are open
-            crate::theming::apply_font_rendering(&settings.hint_style);
-            crate::theming::apply_app_theme(&settings.theme);
-            if let Some(ref sc) = split_container {
-                sc.apply_settings(&settings);
-            }
-            if let Some(ref terminal) = terminal_pane {
-                terminal.apply_settings(&settings);
-            }
-        });
+        let sc_for_open = imp.split_container.borrow().clone();
+        let dialog = crate::editor::SettingsDialog::new(
+            self.upcast_ref(),
+            move |settings| {
+                // Always update app-wide chrome, even if no editor tabs are open
+                crate::theming::apply_font_rendering(&settings.hint_style);
+                crate::theming::apply_app_theme(&settings.theme);
+                if let Some(ref sc) = split_container {
+                    sc.apply_settings(&settings);
+                }
+                if let Some(ref terminal) = terminal_pane {
+                    terminal.apply_settings(&settings);
+                }
+            },
+            move |path| {
+                if let Some(ref sc) = sc_for_open {
+                    if let Err(e) = sc.open_file(&path) {
+                        tracing::error!("failed to open system prompt file: {e}");
+                    }
+                }
+            },
+        );
         dialog.present();
     }
 }

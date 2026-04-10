@@ -66,12 +66,17 @@ impl AgentLoop {
         max_tokens: Option<u32>,
         temperature: Option<f64>,
         max_context_tokens: usize,
+        custom_system_prompt: Option<String>,
     ) -> Self {
         let mode_str = match mode {
             AgentMode::Plan => "PLAN",
             AgentMode::Act => "ACT",
         };
-        let system_prompt = build_system_prompt(&workspace_root.to_string_lossy(), mode_str);
+        let system_prompt = build_system_prompt(
+            &workspace_root.to_string_lossy(),
+            mode_str,
+            custom_system_prompt.as_deref(),
+        );
 
         Self {
             client,

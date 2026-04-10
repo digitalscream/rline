@@ -6,6 +6,8 @@ use gtk4::prelude::*;
 
 use rline_config::EditorSettings;
 
+use rline_ai::agent::context::DEFAULT_SYSTEM_PROMPT;
+
 /// A dialog for editing editor settings.
 #[derive(Debug)]
 pub struct SettingsDialog {
@@ -16,9 +18,10 @@ impl SettingsDialog {
     /// Create a new settings dialog.
     ///
     /// The `on_apply` callback is invoked when the user applies changes.
-    pub fn new<F>(parent: &gtk4::Window, on_apply: F) -> Self
+    pub fn new<F, G>(parent: &gtk4::Window, on_apply: F, on_open_file: G) -> Self
     where
         F: Fn(EditorSettings) + 'static,
+        G: Fn(std::path::PathBuf) + 'static,
     {
         let settings = EditorSettings::load().unwrap_or_default();
 
@@ -47,7 +50,8 @@ impl SettingsDialog {
         // ════════════════════════════════════════════════════════════
         //  Tab 3 — Agent
         // ════════════════════════════════════════════════════════════
-        let agent_page = Self::build_agent_page(&settings);
+        let on_open_file = Rc::new(on_open_file);
+        let agent_page = Self::build_agent_page(&settings, &window, &on_open_file);
 
         notebook.append_page(
             &editor_page.scrolled,
@@ -494,7 +498,11 @@ impl SettingsDialog {
 
     // ── Agent page ─────────────────────────────────────────────────
 
-    fn build_agent_page(settings: &EditorSettings) -> AgentPageWidgets {
+    fn build_agent_page(
+        settings: &EditorSettings,
+        dialog_window: &gtk4::Window,
+        on_open_file: &Rc<impl Fn(std::path::PathBuf) + 'static>,
+    ) -> AgentPageWidgets {
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
         content.set_margin_top(16);
         content.set_margin_bottom(16);
@@ -552,6 +560,34 @@ impl SettingsDialog {
         command_timeout_spin.set_value(settings.agent_command_timeout_secs as f64);
         timeout_row.append(&command_timeout_spin);
 
+        // ── System Prompt ──
+        let prompt_row = Self::make_row("System Prompt");
+        let edit_prompt_btn = gtk4::Button::with_label("Edit");
+        edit_prompt_btn.set_tooltip_text(Some("Edit the custom agent system prompt"));
+        {
+            let on_open = on_open_file.clone();
+            let win = dialog_window.clone();
+            edit_prompt_btn.connect_clicked(move |_| {
+                match rline_config::paths::system_prompt_path() {
+                    Ok(path) => {
+                        // Create the file with the default prompt if it doesn't exist.
+                        if !path.exists() {
+                            if let Some(parent) = path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(&path, DEFAULT_SYSTEM_PROMPT);
+                        }
+                        on_open(path);
+                        win.close();
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to resolve system prompt path: {e}");
+                    }
+                }
+            });
+        }
+        prompt_row.append(&edit_prompt_btn);
+
         // ── Auto-approve section ──
         let approve_header = gtk4::Label::new(None);
         approve_header.set_markup("<b>Auto-approve Permissions (Act mode only)</b>");
@@ -586,6 +622,7 @@ impl SettingsDialog {
         content.append(&temperature_row);
         content.append(&context_row);
         content.append(&timeout_row);
+        content.append(&prompt_row);
         content.append(&approve_header);
         content.append(&approve_read_row);
         content.append(&approve_edit_row);
