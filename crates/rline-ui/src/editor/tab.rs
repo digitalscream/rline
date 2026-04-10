@@ -58,6 +58,7 @@ impl EditorTab {
         view.set_indent_width(settings.tab_width as i32);
         view.set_insert_spaces_instead_of_tabs(settings.insert_spaces);
         view.set_highlight_current_line(true);
+        view.set_smart_home_end(sourceview5::SmartHomeEndType::Before);
         view.set_vexpand(true);
         view.set_hexpand(true);
 
