@@ -347,6 +347,7 @@ impl AgentPanel {
         let max_tokens = Some(settings.agent_max_tokens);
         let temperature = Some(settings.agent_temperature);
         let max_context = settings.agent_context_length as usize;
+        let max_turns = settings.agent_max_turns as usize;
         // Spawn the agent loop on the AI runtime, reusing context if available.
         let ws_root2 = workspace_root.clone();
         let ws_root3 = workspace_root.clone();
@@ -366,6 +367,7 @@ impl AgentPanel {
                     ws_root2,
                     max_tokens,
                     temperature,
+                    max_turns,
                 ),
                 None => {
                     // Load custom system prompt from config dir if it exists.
@@ -390,6 +392,7 @@ impl AgentPanel {
                         temperature,
                         max_context,
                         custom_prompt,
+                        max_turns,
                     )
                 }
             };

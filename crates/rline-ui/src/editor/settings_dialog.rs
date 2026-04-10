@@ -146,6 +146,7 @@ impl SettingsDialog {
                     agent_auto_approve_command: ap.auto_approve_command_switch.is_active(),
                     agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
                     agent_context_length: ap.context_length_spin.value() as u32,
+                    agent_max_turns: ap.max_turns_spin.value() as u32,
                     ..existing
                 };
 
@@ -560,6 +561,12 @@ impl SettingsDialog {
         command_timeout_spin.set_value(settings.agent_command_timeout_secs as f64);
         timeout_row.append(&command_timeout_spin);
 
+        // Max Turns
+        let max_turns_row = Self::make_row("Max Tool-Use Turns");
+        let max_turns_spin = gtk4::SpinButton::with_range(1.0, 500.0, 1.0);
+        max_turns_spin.set_value(settings.agent_max_turns as f64);
+        max_turns_row.append(&max_turns_spin);
+
         // ── System Prompt ──
         let prompt_row = Self::make_row("System Prompt");
         let edit_prompt_btn = gtk4::Button::with_label("Edit");
@@ -622,6 +629,7 @@ impl SettingsDialog {
         content.append(&temperature_row);
         content.append(&context_row);
         content.append(&timeout_row);
+        content.append(&max_turns_row);
         content.append(&prompt_row);
         content.append(&approve_header);
         content.append(&approve_read_row);
@@ -643,6 +651,7 @@ impl SettingsDialog {
             temperature_spin,
             context_length_spin,
             command_timeout_spin,
+            max_turns_spin,
             auto_approve_read_switch,
             auto_approve_edit_switch,
             auto_approve_command_switch,
@@ -1121,6 +1130,7 @@ struct AgentPageWidgets {
     temperature_spin: gtk4::SpinButton,
     context_length_spin: gtk4::SpinButton,
     command_timeout_spin: gtk4::SpinButton,
+    max_turns_spin: gtk4::SpinButton,
     auto_approve_read_switch: gtk4::Switch,
     auto_approve_edit_switch: gtk4::Switch,
     auto_approve_command_switch: gtk4::Switch,

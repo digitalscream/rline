@@ -118,6 +118,9 @@ pub struct EditorSettings {
     /// Maximum context length in tokens for the agent model.
     #[serde(default = "default_agent_context_length")]
     pub agent_context_length: u32,
+    /// Maximum number of tool-use turns before the agent stops.
+    #[serde(default = "default_agent_max_turns")]
+    pub agent_max_turns: u32,
 }
 
 impl Default for EditorSettings {
@@ -161,6 +164,7 @@ impl Default for EditorSettings {
             agent_auto_approve_command: false,
             agent_command_timeout_secs: default_agent_command_timeout(),
             agent_context_length: default_agent_context_length(),
+            agent_max_turns: default_agent_max_turns(),
         }
     }
 }
@@ -238,6 +242,11 @@ fn default_agent_command_timeout() -> u32 {
 /// Default context length in tokens for the agent model.
 fn default_agent_context_length() -> u32 {
     128_000
+}
+
+/// Default maximum tool-use turns for the agent loop.
+fn default_agent_max_turns() -> u32 {
+    50
 }
 
 impl EditorSettings {
@@ -413,6 +422,7 @@ mod tests {
             agent_auto_approve_command: false,
             agent_command_timeout_secs: 60,
             agent_context_length: 256_000,
+            agent_max_turns: 75,
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

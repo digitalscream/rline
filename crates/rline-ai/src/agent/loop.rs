@@ -67,6 +67,7 @@ impl AgentLoop {
         temperature: Option<f64>,
         max_context_tokens: usize,
         custom_system_prompt: Option<String>,
+        max_turns: usize,
     ) -> Self {
         let mode_str = match mode {
             AgentMode::Plan => "PLAN",
@@ -89,7 +90,7 @@ impl AgentLoop {
             workspace_root,
             max_tokens,
             temperature,
-            max_turns: 50,
+            max_turns,
         }
     }
 
@@ -105,6 +106,7 @@ impl AgentLoop {
         workspace_root: PathBuf,
         max_tokens: Option<u32>,
         temperature: Option<f64>,
+        max_turns: usize,
     ) -> Self {
         Self {
             client,
@@ -117,7 +119,7 @@ impl AgentLoop {
             workspace_root,
             max_tokens,
             temperature,
-            max_turns: 50,
+            max_turns,
         }
     }
 
