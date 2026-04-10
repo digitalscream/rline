@@ -5,6 +5,7 @@
 //! highlighting using colored backgrounds.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gtk4::prelude::*;
 use sourceview5::prelude::*;
@@ -32,6 +33,10 @@ struct AlignedContent {
     right_text: String,
     left_markers: Vec<LineKind>,
     right_markers: Vec<LineKind>,
+    /// Actual file line number for each buffer line on the left (None = padding).
+    left_line_numbers: Vec<Option<usize>>,
+    /// Actual file line number for each buffer line on the right (None = padding).
+    right_line_numbers: Vec<Option<usize>>,
 }
 
 /// A side-by-side diff view shown as a tab in the editor notebook.
@@ -89,6 +94,10 @@ impl DiffTab {
         // Create diff highlight tags and apply them using the aligned line ranges.
         Self::create_diff_tags(&left_buffer, &right_buffer);
         Self::apply_aligned_highlights(&left_buffer, &right_buffer, &aligned);
+
+        // Install custom line number gutter renderers that skip padding lines.
+        Self::install_line_number_gutter(&left_view, aligned.left_line_numbers);
+        Self::install_line_number_gutter(&right_view, aligned.right_line_numbers);
 
         // Mark both as not modified (they are display-only).
         left_buffer.set_modified(false);
@@ -160,7 +169,7 @@ impl DiffTab {
     /// Create a configured sourceview5::View for the diff pane.
     fn create_view(buffer: &sourceview5::Buffer, settings: &EditorSettings) -> sourceview5::View {
         let view = sourceview5::View::with_buffer(buffer);
-        view.set_show_line_numbers(true);
+        view.set_show_line_numbers(false);
         view.set_vexpand(true);
         view.set_hexpand(true);
         view.set_tab_width(settings.tab_width);
@@ -177,6 +186,42 @@ impl DiffTab {
         );
 
         view
+    }
+
+    /// Install a custom gutter renderer that shows actual file line numbers,
+    /// leaving padding lines blank.
+    fn install_line_number_gutter(
+        view: &sourceview5::View,
+        line_numbers: Vec<Option<usize>>,
+    ) {
+        use sourceview5::prelude::GutterRendererExt;
+        use sourceview5::prelude::GutterRendererTextExt;
+
+        let renderer = sourceview5::GutterRendererText::new();
+        renderer.set_alignment_mode(sourceview5::GutterRendererAlignmentMode::First);
+
+        // Compute width hint from the largest line number.
+        let max_num = line_numbers.iter().filter_map(|n| *n).max().unwrap_or(1);
+        let digits = format!("{max_num}").len();
+        // Measure approximate width using the markup measurement helper.
+        let markup = " ".repeat(digits + 1);
+        renderer.set_markup(&markup);
+
+        let line_numbers = Rc::new(line_numbers);
+        let ln = Rc::clone(&line_numbers);
+        renderer.connect_query_data(move |r, _object, line| {
+            let r = r.downcast_ref::<sourceview5::GutterRendererText>()
+                .expect("renderer is GutterRendererText");
+            let idx = line as usize;
+            if let Some(Some(num)) = ln.get(idx) {
+                r.set_markup(&format!("{num} "));
+            } else {
+                r.set_markup("");
+            }
+        });
+
+        let gutter = sourceview5::prelude::ViewExt::gutter(view, gtk4::TextWindowType::Left);
+        gutter.insert(&renderer, 0);
     }
 
     /// Apply the sourceview theme to a buffer.
@@ -231,6 +276,12 @@ impl DiffTab {
         let mut right_out: Vec<String> = Vec::new();
         let mut left_markers: Vec<LineKind> = Vec::new();
         let mut right_markers: Vec<LineKind> = Vec::new();
+        let mut left_line_numbers: Vec<Option<usize>> = Vec::new();
+        let mut right_line_numbers: Vec<Option<usize>> = Vec::new();
+
+        // 1-based file line counters for each side.
+        let mut left_file_line: usize = 1;
+        let mut right_file_line: usize = 1;
 
         let mut old_pos: usize = 0;
         let mut new_pos: usize = 0;
@@ -245,6 +296,10 @@ impl DiffTab {
                 right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
                 left_markers.push(LineKind::Context);
                 right_markers.push(LineKind::Context);
+                left_line_numbers.push(Some(left_file_line));
+                right_line_numbers.push(Some(right_file_line));
+                left_file_line += 1;
+                right_file_line += 1;
                 old_pos += 1;
                 new_pos += 1;
             }
@@ -261,6 +316,10 @@ impl DiffTab {
                         right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
                         left_markers.push(LineKind::Context);
                         right_markers.push(LineKind::Context);
+                        left_line_numbers.push(Some(left_file_line));
+                        right_line_numbers.push(Some(right_file_line));
+                        left_file_line += 1;
+                        right_file_line += 1;
                         old_pos += 1;
                         new_pos += 1;
                         i += 1;
@@ -294,12 +353,16 @@ impl DiffTab {
                         for _ in 0..del_count {
                             left_out.push(old_lines.get(old_pos).unwrap_or(&"").to_string());
                             left_markers.push(LineKind::Deletion);
+                            left_line_numbers.push(Some(left_file_line));
+                            left_file_line += 1;
                             old_pos += 1;
                         }
                         // Emit added lines on the right.
                         for _ in 0..add_count {
                             right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
                             right_markers.push(LineKind::Addition);
+                            right_line_numbers.push(Some(right_file_line));
+                            right_file_line += 1;
                             new_pos += 1;
                         }
 
@@ -309,12 +372,14 @@ impl DiffTab {
                                 for _ in 0..(del_count - add_count) {
                                     right_out.push(String::new());
                                     right_markers.push(LineKind::Padding);
+                                    right_line_numbers.push(None);
                                 }
                             }
                             std::cmp::Ordering::Less => {
                                 for _ in 0..(add_count - del_count) {
                                     left_out.push(String::new());
                                     left_markers.push(LineKind::Padding);
+                                    left_line_numbers.push(None);
                                 }
                             }
                             std::cmp::Ordering::Equal => {}
@@ -330,6 +395,10 @@ impl DiffTab {
             right_out.push(new_lines.get(new_pos).unwrap_or(&"").to_string());
             left_markers.push(LineKind::Context);
             right_markers.push(LineKind::Context);
+            left_line_numbers.push(Some(left_file_line));
+            right_line_numbers.push(Some(right_file_line));
+            left_file_line += 1;
+            right_file_line += 1;
             old_pos += 1;
             new_pos += 1;
         }
@@ -339,6 +408,8 @@ impl DiffTab {
             right_text: right_out.join("\n"),
             left_markers,
             right_markers,
+            left_line_numbers,
+            right_line_numbers,
         }
     }
 

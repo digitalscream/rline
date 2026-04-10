@@ -30,9 +30,7 @@ impl TabKind {
         match self {
             Self::Editor(tab) => tab.file_path().map(|p| p.canonicalize().unwrap_or(p)),
             Self::Diff(tab) => {
-                let mut key = PathBuf::from("diff:");
-                key.push(tab.file_path());
-                Some(key)
+                Some(PathBuf::from(format!("diff:{}", tab.file_path().display())))
             }
         }
     }
@@ -217,9 +215,9 @@ impl EditorPane {
 
     /// Open a side-by-side diff view for a file, or focus an existing one.
     pub fn open_diff(&self, path: &Path, diff: &FileDiff) -> Result<(), UiError> {
-        // Dedup key for diff tabs.
-        let mut dedup_key = PathBuf::from("diff:");
-        dedup_key.push(path);
+        // Dedup key for diff tabs — use format! instead of push() because
+        // push() replaces the entire path when the argument is absolute.
+        let dedup_key = PathBuf::from(format!("diff:{}", path.display()));
 
         {
             let index_map = self.path_to_index.borrow();

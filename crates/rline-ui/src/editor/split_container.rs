@@ -156,8 +156,9 @@ impl SplitContainer {
 
     /// Open a side-by-side diff view in the active pane.
     pub fn open_diff(&self, path: &Path, diff: &FileDiff) -> Result<(), UiError> {
-        let mut dedup_key = PathBuf::from("diff:");
-        dedup_key.push(path);
+        // Use format! instead of push() because push() replaces the entire
+        // path when the argument is absolute.
+        let dedup_key = PathBuf::from(format!("diff:{}", path.display()));
 
         if self.try_focus_existing(&dedup_key) {
             return Ok(());
