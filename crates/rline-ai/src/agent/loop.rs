@@ -289,12 +289,49 @@ impl AgentLoop {
                 // Route execute_command through the UI terminal for proper
                 // shell environment (rbenv, nvm, virtualenv, etc.).
                 if tool_name == "execute_command" {
-                    let result = self
-                        .handle_terminal_command(&tc.id, tool_args, &mut failure_counts)
-                        .await;
-                    if result.is_none() {
-                        // Cancelled.
-                        return self.context;
+                    // Check permission before executing.
+                    let cmd_approved = if (self.auto_approve)(
+                        tool_name,
+                        ToolCategory::ExecuteCommand,
+                        tool_args,
+                    ) {
+                        true
+                    } else {
+                        let (resp_tx, resp_rx) = oneshot::channel();
+                        let _ = self.event_tx.send(AgentEvent::ApprovalNeeded {
+                            id: tc.id.clone(),
+                            name: tool_name.clone(),
+                            category: ToolCategory::ExecuteCommand,
+                            arguments: tool_args.clone(),
+                            respond: resp_tx,
+                        });
+                        match resp_rx.await {
+                            Ok(decision) => decision,
+                            Err(_) => {
+                                let _ = self
+                                    .event_tx
+                                    .send(AgentEvent::Error("Approval cancelled".to_owned()));
+                                return self.context;
+                            }
+                        }
+                    };
+
+                    if cmd_approved {
+                        let result = self
+                            .handle_terminal_command(&tc.id, tool_args, &mut failure_counts)
+                            .await;
+                        if result.is_none() {
+                            return self.context;
+                        }
+                    } else {
+                        let denied_msg = "Command execution denied by user.".to_owned();
+                        self.context.add_tool_result(&tc.id, &denied_msg);
+                        let _ = self.event_tx.send(AgentEvent::ToolResult {
+                            id: tc.id.clone(),
+                            name: tool_name.clone(),
+                            success: false,
+                            output: denied_msg,
+                        });
                     }
                     continue;
                 }

@@ -113,6 +113,10 @@ pub struct EditorSettings {
     /// Auto-approve command execution tool calls.
     #[serde(default)]
     pub agent_auto_approve_command: bool,
+    /// YOLO mode: skip approval for commands that affect the system outside
+    /// the project directory (e.g. `apt install`, `sudo`, global npm installs).
+    #[serde(default)]
+    pub agent_yolo_mode: bool,
     /// Timeout in seconds for agent command execution.
     #[serde(default = "default_agent_command_timeout")]
     pub agent_command_timeout_secs: u32,
@@ -168,6 +172,7 @@ impl Default for EditorSettings {
             agent_auto_approve_read: true,
             agent_auto_approve_edit: false,
             agent_auto_approve_command: false,
+            agent_yolo_mode: false,
             agent_command_timeout_secs: default_agent_command_timeout(),
             agent_context_length: default_agent_context_length(),
             agent_max_turns: default_agent_max_turns(),
@@ -427,6 +432,7 @@ mod tests {
             agent_auto_approve_read: true,
             agent_auto_approve_edit: true,
             agent_auto_approve_command: false,
+            agent_yolo_mode: false,
             agent_command_timeout_secs: 60,
             agent_context_length: 256_000,
             agent_max_turns: 75,
