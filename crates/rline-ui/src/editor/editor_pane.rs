@@ -29,9 +29,7 @@ impl TabKind {
     fn dedup_key(&self) -> Option<PathBuf> {
         match self {
             Self::Editor(tab) => tab.file_path().map(|p| p.canonicalize().unwrap_or(p)),
-            Self::Diff(tab) => {
-                Some(PathBuf::from(format!("diff:{}", tab.file_path().display())))
-            }
+            Self::Diff(tab) => Some(PathBuf::from(format!("diff:{}", tab.file_path().display()))),
         }
     }
 

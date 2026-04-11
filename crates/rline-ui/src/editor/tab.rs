@@ -10,6 +10,7 @@ use sourceview5::prelude::*;
 use rline_config::EditorSettings;
 use rline_core::LineIndex;
 
+use crate::editor::block_completion::BlockCompletion;
 use crate::editor::bracket_completion::BracketCompletion;
 use crate::editor::find_bar::FindBar;
 use crate::editor::inline_completion::InlineCompletion;
@@ -43,6 +44,8 @@ pub struct EditorTab {
     inline_completion: Rc<RefCell<Option<InlineCompletion>>>,
     /// Automatic bracket/quote pair completion (kept alive for the key controller).
     _bracket_completion: BracketCompletion,
+    /// Block completion, auto-dedent, comment continuation, and HTML tag closing.
+    _block_completion: BlockCompletion,
 }
 
 impl EditorTab {
@@ -148,6 +151,11 @@ impl EditorTab {
         // ghost-text dismissal takes priority in the Capture phase.
         let bracket_completion = BracketCompletion::new(&view, &buffer);
 
+        // Block completion must be added after BracketCompletion so it has
+        // higher Capture-phase priority for Enter handling (no conflict with
+        // bracket character keys).
+        let block_completion = BlockCompletion::new(&view, &buffer);
+
         Self {
             overlay,
             view,
@@ -161,6 +169,7 @@ impl EditorTab {
             find_bar,
             inline_completion: Rc::new(RefCell::new(inline_completion)),
             _bracket_completion: bracket_completion,
+            _block_completion: block_completion,
         }
     }
 

@@ -190,10 +190,7 @@ impl DiffTab {
 
     /// Install a custom gutter renderer that shows actual file line numbers,
     /// leaving padding lines blank.
-    fn install_line_number_gutter(
-        view: &sourceview5::View,
-        line_numbers: Vec<Option<usize>>,
-    ) {
+    fn install_line_number_gutter(view: &sourceview5::View, line_numbers: Vec<Option<usize>>) {
         use sourceview5::prelude::GutterRendererExt;
         use sourceview5::prelude::GutterRendererTextExt;
 
@@ -210,7 +207,8 @@ impl DiffTab {
         let line_numbers = Rc::new(line_numbers);
         let ln = Rc::clone(&line_numbers);
         renderer.connect_query_data(move |r, _object, line| {
-            let r = r.downcast_ref::<sourceview5::GutterRendererText>()
+            let r = r
+                .downcast_ref::<sourceview5::GutterRendererText>()
                 .expect("renderer is GutterRendererText");
             let idx = line as usize;
             if let Some(Some(num)) = ln.get(idx) {
