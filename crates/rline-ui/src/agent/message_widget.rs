@@ -213,6 +213,8 @@ pub fn build_completion(summary: &str) -> gtk4::Box {
     container.append(&header);
 
     let label = gtk4::Label::new(Some(summary));
+    let pango = super::markdown::markdown_to_pango(summary);
+    label.set_markup(&pango);
     label.set_halign(gtk4::Align::Start);
     label.set_wrap(true);
     label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
@@ -245,6 +247,8 @@ pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gt
     container.append(&header);
 
     let question_label = gtk4::Label::new(Some(question));
+    let pango = super::markdown::markdown_to_pango(question);
+    question_label.set_markup(&pango);
     question_label.set_halign(gtk4::Align::Start);
     question_label.set_wrap(true);
     question_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
