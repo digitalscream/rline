@@ -78,6 +78,59 @@ impl TerminalTab {
         }
     }
 
+    /// Create a new terminal tab with a custom title and spawn a shell.
+    pub fn new_with_title(
+        title: &str,
+        working_dir: &Path,
+        font_family: &str,
+        font_size: u32,
+    ) -> Self {
+        let terminal = vte4::Terminal::new();
+        terminal.set_vexpand(true);
+        terminal.set_hexpand(true);
+        terminal.set_cursor_shape(vte4::CursorShape::Block);
+        terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::Off);
+
+        Self::apply_font(&terminal, font_family, font_size);
+
+        let name_label = gtk4::Label::new(Some(title));
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.add_css_class("circular");
+        close_btn.set_valign(gtk4::Align::Center);
+        close_btn.set_has_frame(false);
+        close_btn.set_margin_start(2);
+
+        let tab_label = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        tab_label.append(&name_label);
+        tab_label.append(&close_btn);
+
+        let cwd = working_dir.to_string_lossy().to_string();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+
+        terminal.spawn_async(
+            vte4::PtyFlags::DEFAULT,
+            Some(cwd.as_str()),
+            &[shell.as_str()],
+            &[],
+            glib::SpawnFlags::DEFAULT,
+            || {},
+            -1,
+            gio::Cancellable::NONE,
+            |result| {
+                if let Err(e) = result {
+                    tracing::error!("failed to spawn agent terminal shell: {e}");
+                }
+            },
+        );
+
+        Self {
+            terminal,
+            tab_label,
+            close_btn,
+        }
+    }
+
     /// The terminal widget.
     pub fn widget(&self) -> &vte4::Terminal {
         &self.terminal

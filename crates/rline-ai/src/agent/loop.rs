@@ -5,12 +5,17 @@
 //! results back, and repeats until the model stops calling tools or the
 //! task is completed.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
+
+/// Maximum number of consecutive failures for the same tool call before
+/// the agent is forced to ask the user for guidance.
+const MAX_TOOL_RETRIES: u32 = 3;
 
 use crate::agent::context::{build_system_prompt, ConversationContext};
 use crate::agent::event::AgentEvent;
@@ -133,6 +138,8 @@ impl AgentLoop {
         self.send_context_update();
 
         let mut turn = 0;
+        // Track consecutive failures: key = "tool_name\0args", value = count.
+        let mut failure_counts: HashMap<String, u32> = HashMap::new();
 
         loop {
             if self.cancel.is_cancelled() {
@@ -279,6 +286,19 @@ impl AgentLoop {
                     break;
                 }
 
+                // Route execute_command through the UI terminal for proper
+                // shell environment (rbenv, nvm, virtualenv, etc.).
+                if tool_name == "execute_command" {
+                    let result = self
+                        .handle_terminal_command(&tc.id, tool_args, &mut failure_counts)
+                        .await;
+                    if result.is_none() {
+                        // Cancelled.
+                        return self.context;
+                    }
+                    continue;
+                }
+
                 // Check permissions for non-interactive tools.
                 let category = self
                     .registry
@@ -313,26 +333,54 @@ impl AgentLoop {
                 };
 
                 let tool_result = if approved {
-                    // Execute the tool on a blocking thread.
+                    // Execute the tool on a blocking thread, but race against
+                    // the cancellation token so Stop takes effect immediately.
                     let name = tool_name.clone();
                     let args = tool_args.clone();
                     let root = self.workspace_root.clone();
-                    let registry_result = tokio::task::spawn_blocking(move || {
+                    let handle = tokio::task::spawn_blocking(move || {
                         let registry = ToolRegistry::new();
                         registry.execute(&name, &args, &root)
-                    })
-                    .await;
+                    });
 
-                    match registry_result {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => ToolResult::err(format!("Tool error: {e}")),
-                        Err(e) => ToolResult::err(format!("Task join error: {e}")),
+                    tokio::select! {
+                        result = handle => {
+                            match result {
+                                Ok(Ok(r)) => r,
+                                Ok(Err(e)) => ToolResult::err(format!("Tool error: {e}")),
+                                Err(e) => ToolResult::err(format!("Task join error: {e}")),
+                            }
+                        }
+                        _ = self.cancel.cancelled() => {
+                            let _ = self.event_tx.send(AgentEvent::Error("Cancelled".to_owned()));
+                            return self.context;
+                        }
                     }
                 } else {
                     ToolResult::err("Tool execution denied by user.".to_owned())
                 };
 
-                self.context.add_tool_result(&tc.id, &tool_result.output);
+                // Track consecutive failures for the same tool+args.
+                let failure_key = format!("{tool_name}\0{tool_args}");
+                let mut result_output = tool_result.output.clone();
+
+                if tool_result.success {
+                    failure_counts.remove(&failure_key);
+                } else {
+                    let count = failure_counts.entry(failure_key).or_insert(0);
+                    *count += 1;
+                    if *count >= MAX_TOOL_RETRIES {
+                        result_output.push_str(&format!(
+                            "\n\n[SYSTEM] This tool call has failed {} consecutive times with \
+                             the same arguments. You MUST try a different approach or use \
+                             ask_followup_question to ask the user for guidance. Do NOT retry \
+                             the same command again.",
+                            *count
+                        ));
+                    }
+                }
+
+                self.context.add_tool_result(&tc.id, &result_output);
 
                 // Emit FileChanged for file-editing tools so the UI can show a diff.
                 if tool_result.success
@@ -419,6 +467,91 @@ impl AgentLoop {
                 None
             }
         }
+    }
+
+    /// Handle `execute_command` by routing it to the UI terminal.
+    async fn handle_terminal_command(
+        &mut self,
+        tool_call_id: &str,
+        arguments: &str,
+        failure_counts: &mut HashMap<String, u32>,
+    ) -> Option<()> {
+        #[derive(serde::Deserialize)]
+        struct CmdArgs {
+            command: String,
+            #[serde(default)]
+            timeout_secs: Option<u64>,
+        }
+
+        let args: CmdArgs = match serde_json::from_str(arguments) {
+            Ok(a) => a,
+            Err(e) => {
+                let err_msg = format!("Invalid command arguments: {e}");
+                self.context.add_tool_result(tool_call_id, &err_msg);
+                let _ = self.event_tx.send(AgentEvent::ToolResult {
+                    id: tool_call_id.to_owned(),
+                    name: "execute_command".to_owned(),
+                    success: false,
+                    output: err_msg,
+                });
+                return Some(());
+            }
+        };
+
+        let timeout = args.timeout_secs.unwrap_or(30);
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let _ = self.event_tx.send(AgentEvent::TerminalCommand {
+            id: tool_call_id.to_owned(),
+            command: args.command.clone(),
+            working_dir: self.workspace_root.clone(),
+            timeout_secs: timeout,
+            respond: resp_tx,
+        });
+
+        // Wait for the UI to execute the command and return the result.
+        let (success, output) = tokio::select! {
+            result = resp_rx => {
+                match result {
+                    Ok(r) => r,
+                    Err(_) => (false, "Terminal command channel closed".to_owned()),
+                }
+            }
+            _ = self.cancel.cancelled() => {
+                let _ = self.event_tx.send(AgentEvent::Error("Cancelled".to_owned()));
+                return None;
+            }
+        };
+
+        // Track consecutive failures.
+        let failure_key = format!("execute_command\0{}", args.command);
+        let mut result_output = output.clone();
+
+        if success {
+            failure_counts.remove(&failure_key);
+        } else {
+            let count = failure_counts.entry(failure_key).or_insert(0);
+            *count += 1;
+            if *count >= MAX_TOOL_RETRIES {
+                result_output.push_str(&format!(
+                    "\n\n[SYSTEM] This command has failed {} consecutive times. \
+                     You MUST try a different approach or use ask_followup_question \
+                     to ask the user for guidance. Do NOT retry the same command again.",
+                    *count
+                ));
+            }
+        }
+
+        self.context.add_tool_result(tool_call_id, &result_output);
+
+        let _ = self.event_tx.send(AgentEvent::ToolResult {
+            id: tool_call_id.to_owned(),
+            name: "execute_command".to_owned(),
+            success,
+            output,
+        });
+
+        Some(())
     }
 }
 

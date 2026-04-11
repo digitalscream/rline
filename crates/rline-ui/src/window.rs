@@ -224,7 +224,7 @@ impl RlineWindow {
             &agent_panel,
         );
         self.wire_git_panel(&git_panel, &split_container);
-        self.wire_agent_panel(&agent_panel, &split_container);
+        self.wire_agent_panel(&agent_panel, &split_container, &terminal_pane);
 
         // Wire action buttons (needs the window reference for confirmation dialogs).
         git_panel.wire_action_buttons(self.upcast_ref::<gtk4::ApplicationWindow>());
@@ -430,7 +430,12 @@ impl RlineWindow {
     }
 
     /// Wire the agent panel's diff callback to the editor pane.
-    fn wire_agent_panel(&self, agent_panel: &AgentPanel, split_container: &SplitContainer) {
+    fn wire_agent_panel(
+        &self,
+        agent_panel: &AgentPanel,
+        split_container: &SplitContainer,
+        terminal_pane: &crate::terminal::TerminalPane,
+    ) {
         let sc = split_container.clone();
         let project_root = self.imp().project_root.clone();
 
@@ -465,6 +470,12 @@ impl RlineWindow {
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
             });
+        });
+
+        // Wire terminal command execution.
+        let tp = terminal_pane.clone();
+        agent_panel.set_on_terminal_command(move |command, working_dir, timeout_secs, respond| {
+            tp.execute_agent_command(command, working_dir, timeout_secs, respond);
         });
     }
 
