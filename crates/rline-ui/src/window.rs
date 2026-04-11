@@ -947,8 +947,24 @@ impl RlineWindow {
     }
 
     fn action_show_shortcuts(&self) {
-        let dialog =
-            crate::shortcuts_dialog::build_shortcuts_dialog(self.upcast_ref::<gtk4::Window>());
+        let settings = rline_config::EditorSettings::load().unwrap_or_default();
+        let window_ref = self.clone();
+        let dialog = crate::shortcuts_dialog::build_shortcuts_dialog(
+            self.upcast_ref::<gtk4::Window>(),
+            &settings,
+            move |bindings| {
+                // Persist the updated keybindings.
+                let mut settings = rline_config::EditorSettings::load().unwrap_or_default();
+                settings.keybindings = bindings.clone();
+                if let Err(e) = settings.save() {
+                    tracing::error!("failed to save keybindings: {e}");
+                }
+                // Re-register accelerators on the running application.
+                if let Some(app) = window_ref.application() {
+                    crate::shortcuts::register_accels(&app, bindings);
+                }
+            },
+        );
         dialog.present();
     }
 

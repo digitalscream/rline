@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
+use crate::keybindings::KeyBindings;
 use crate::paths;
 
 /// Editor settings that are persisted to disk.
@@ -121,6 +122,11 @@ pub struct EditorSettings {
     /// Maximum number of tool-use turns before the agent stops.
     #[serde(default = "default_agent_max_turns")]
     pub agent_max_turns: u32,
+
+    // ── Keyboard Shortcuts ──
+    /// Configurable keyboard shortcut bindings.
+    #[serde(default)]
+    pub keybindings: KeyBindings,
 }
 
 impl Default for EditorSettings {
@@ -165,6 +171,7 @@ impl Default for EditorSettings {
             agent_command_timeout_secs: default_agent_command_timeout(),
             agent_context_length: default_agent_context_length(),
             agent_max_turns: default_agent_max_turns(),
+            keybindings: KeyBindings::default(),
         }
     }
 }
@@ -423,6 +430,7 @@ mod tests {
             agent_command_timeout_secs: 60,
             agent_context_length: 256_000,
             agent_max_turns: 75,
+            keybindings: KeyBindings::default(),
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

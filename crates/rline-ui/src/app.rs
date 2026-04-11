@@ -26,7 +26,9 @@ mod imp {
     impl ApplicationImpl for RlineApplication {
         fn activate(&self) {
             let app = self.obj();
-            shortcuts::register_accels(app.upcast_ref());
+
+            let settings = rline_config::EditorSettings::load().unwrap_or_default();
+            shortcuts::register_accels(app.upcast_ref(), &settings.keybindings);
 
             let window = RlineWindow::new(app.upcast_ref());
             window.present();

@@ -1,21 +1,19 @@
 //! Keyboard shortcut registration for the application.
 
 use gtk4::prelude::*;
+use rline_config::{KeyBindings, SHORTCUT_DESCRIPTORS};
 
-/// Register all keyboard accelerators on the application.
-pub fn register_accels(app: &gtk4::Application) {
-    app.set_accels_for_action("win.open-file", &["<Ctrl>O"]);
-    app.set_accels_for_action("win.save-file", &["<Ctrl>S"]);
-    app.set_accels_for_action("win.close-tab", &["<Ctrl>W"]);
-    app.set_accels_for_action("win.quick-open", &["<Ctrl>P"]);
-    app.set_accels_for_action("win.project-search", &["<Ctrl><Shift>F"]);
-    app.set_accels_for_action("win.quit-app", &["<Ctrl>Q"]);
-    app.set_accels_for_action("win.show-git", &["<Ctrl><Shift>G"]);
-    app.set_accels_for_action("win.show-files", &["<Ctrl><Shift>E"]);
-    app.set_accels_for_action("win.focus-terminal", &["<Ctrl><Shift>W"]);
-    app.set_accels_for_action("win.find", &["<Ctrl>F"]);
-    app.set_accels_for_action("win.find-replace", &["<Ctrl>H"]);
-    app.set_accels_for_action("win.split-editor", &["<Ctrl>backslash"]);
-    app.set_accels_for_action("win.trigger-completion", &["<Ctrl>space"]);
-    app.set_accels_for_action("win.focus-agent", &["<Ctrl><Shift>A"]);
+/// Register all keyboard accelerators on the application using the
+/// given keybindings configuration.
+pub fn register_accels(app: &gtk4::Application, bindings: &KeyBindings) {
+    for desc in SHORTCUT_DESCRIPTORS {
+        if let Some(accel) = bindings.accel_for_action(desc.action) {
+            if !accel.is_empty() {
+                app.set_accels_for_action(desc.action, &[accel]);
+            } else {
+                // Clear any previously registered accelerator.
+                app.set_accels_for_action(desc.action, &[] as &[&str]);
+            }
+        }
+    }
 }
