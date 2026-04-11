@@ -76,9 +76,8 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     container.set_margin_start(8);
     container.set_margin_end(8);
-    container.set_margin_top(2);
-    container.set_margin_bottom(2);
-    container.add_css_class("card");
+    container.set_margin_top(0);
+    container.set_margin_bottom(0);
 
     // Header with toggle.
     let header_btn = gtk4::Button::new();
@@ -109,7 +108,7 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     let detail_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
     detail_box.set_margin_start(8);
     detail_box.set_margin_end(8);
-    detail_box.set_margin_bottom(4);
+    detail_box.set_margin_bottom(2);
 
     // Arguments display.
     if !arguments.is_empty() {
@@ -140,7 +139,7 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     button_box.set_margin_start(8);
     button_box.set_margin_end(8);
-    button_box.set_margin_bottom(4);
+    button_box.set_margin_bottom(2);
     button_box.set_halign(gtk4::Align::Start);
     container.append(&button_box);
 
@@ -213,6 +212,8 @@ pub fn build_completion(summary: &str) -> gtk4::Box {
     container.append(&header);
 
     let label = gtk4::Label::new(Some(summary));
+    let pango = super::markdown::markdown_to_pango(summary);
+    label.set_markup(&pango);
     label.set_halign(gtk4::Align::Start);
     label.set_wrap(true);
     label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
@@ -245,6 +246,8 @@ pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gt
     container.append(&header);
 
     let question_label = gtk4::Label::new(Some(question));
+    let pango = super::markdown::markdown_to_pango(question);
+    question_label.set_markup(&pango);
     question_label.set_halign(gtk4::Align::Start);
     question_label.set_wrap(true);
     question_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
@@ -355,6 +358,95 @@ fn extract_tool_detail(name: &str, arguments: &str) -> Option<String> {
         "attempt_completion" => Some("task complete".to_owned()),
         _ => None,
     }
+}
+
+/// Build a collapsible thinking block widget.
+///
+/// Shows "Thought for N seconds" as a clickable header with the thinking
+/// content hidden behind a revealer.
+pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    container.set_margin_start(8);
+    container.set_margin_end(8);
+    container.set_margin_top(2);
+    container.set_margin_bottom(2);
+
+    let header_btn = gtk4::Button::new();
+    header_btn.add_css_class("flat");
+    let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    header_box.set_margin_start(4);
+    header_box.set_margin_end(4);
+
+    let arrow = gtk4::Label::new(Some("\u{25B6}")); // ▶
+    header_box.append(&arrow);
+
+    let label_text = if duration_secs == 1 {
+        "Thought for 1 second".to_owned()
+    } else {
+        format!("Thought for {duration_secs} seconds")
+    };
+    let name_label = gtk4::Label::new(None);
+    name_label.set_markup(&format!(
+        "<small><i>{}</i></small>",
+        glib::markup_escape_text(&label_text)
+    ));
+    name_label.set_halign(gtk4::Align::Start);
+    header_box.append(&name_label);
+
+    header_btn.set_child(Some(&header_box));
+    container.append(&header_btn);
+
+    let revealer = gtk4::Revealer::new();
+    revealer.set_reveal_child(false);
+    revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
+
+    let content_label = gtk4::Label::new(Some(content));
+    let pango = super::markdown::markdown_to_pango(content);
+    content_label.set_markup(&pango);
+    content_label.set_halign(gtk4::Align::Start);
+    content_label.set_wrap(true);
+    content_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+    content_label.set_selectable(true);
+    content_label.set_xalign(0.0);
+    content_label.set_margin_start(8);
+    content_label.set_margin_end(8);
+    content_label.set_margin_bottom(4);
+    revealer.set_child(Some(&content_label));
+    container.append(&revealer);
+
+    let rev_clone = revealer.clone();
+    let arrow_clone = arrow.clone();
+    header_btn.connect_clicked(move |_| {
+        let revealed = rev_clone.reveals_child();
+        rev_clone.set_reveal_child(!revealed);
+        arrow_clone.set_text(if revealed { "\u{25B6}" } else { "\u{25BC}" });
+    });
+
+    container
+}
+
+/// Build a "Working..." indicator label.
+///
+/// Returns the container box and the label (for updating the dot animation).
+pub fn build_working_indicator() -> (gtk4::Box, gtk4::Label) {
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    container.set_margin_start(8);
+    container.set_margin_end(8);
+    container.set_margin_top(4);
+    container.set_margin_bottom(4);
+
+    let header = gtk4::Label::new(None);
+    header.set_markup("<b>Assistant</b>");
+    header.set_halign(gtk4::Align::Start);
+    container.append(&header);
+
+    let label = gtk4::Label::new(None);
+    label.set_markup("<i>Working.</i>");
+    label.set_halign(gtk4::Align::Start);
+    label.set_xalign(0.0);
+    container.append(&label);
+
+    (container, label)
 }
 
 /// Build an error message widget.

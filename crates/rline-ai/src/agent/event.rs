@@ -79,6 +79,24 @@ pub enum AgentEvent {
     /// An error occurred during the agent loop.
     Error(String),
 
+    /// Request to execute a command in the UI terminal.
+    ///
+    /// The agent loop sends this instead of running `execute_command` via
+    /// `std::process::Command`, so the command runs in the user's real shell
+    /// environment (with rbenv, nvm, etc.).
+    TerminalCommand {
+        /// The tool call ID.
+        id: String,
+        /// The shell command to run.
+        command: String,
+        /// Working directory.
+        working_dir: PathBuf,
+        /// Timeout in seconds.
+        timeout_secs: u64,
+        /// Channel to send the result back to the agent loop.
+        respond: oneshot::Sender<(bool, String)>,
+    },
+
     /// The agent has completed the task (or plan).
     Finished {
         /// Summary of what was accomplished.
@@ -128,6 +146,11 @@ impl std::fmt::Debug for AgentEvent {
                 .finish(),
             Self::TurnComplete => write!(f, "TurnComplete"),
             Self::Error(e) => f.debug_tuple("Error").field(e).finish(),
+            Self::TerminalCommand { id, command, .. } => f
+                .debug_struct("TerminalCommand")
+                .field("id", id)
+                .field("command", command)
+                .finish(),
             Self::Finished { summary, plan_mode } => f
                 .debug_struct("Finished")
                 .field("summary", summary)

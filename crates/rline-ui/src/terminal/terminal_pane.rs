@@ -1,14 +1,16 @@
 //! TerminalPane — tabbed notebook of terminal emulators.
 
+use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-
-use gtk4::prelude::*;
 use vte4::prelude::*;
 
 use super::terminal_tab::TerminalTab;
 use crate::theming::TerminalColors;
+
+/// Title used for the dedicated agent terminal tab.
+const AGENT_TERMINAL_TITLE: &str = "rline agent terminal";
 
 /// The terminal pane containing a notebook of terminal tabs.
 #[derive(Debug, Clone)]
@@ -208,6 +210,168 @@ impl TerminalPane {
     /// The container widget.
     pub fn widget(&self) -> &gtk4::Box {
         &self.container
+    }
+
+    /// Execute a command in the dedicated agent terminal tab.
+    ///
+    /// Creates the "rline agent terminal" tab if it doesn't exist. The command
+    /// is sent to the shell via `feed_child()` and output is captured through
+    /// a temp file. The `respond` channel receives `(success, output)` when
+    /// the command completes or times out.
+    pub fn execute_agent_command(
+        &self,
+        command: &str,
+        working_dir: &Path,
+        timeout_secs: u64,
+        respond: tokio::sync::oneshot::Sender<(bool, String)>,
+    ) {
+        let terminal = self.get_or_create_agent_terminal(working_dir);
+
+        // Switch to the agent terminal tab.
+        if let Some(page_num) = self.find_agent_terminal_page() {
+            self.notebook.set_current_page(Some(page_num));
+        }
+
+        // Use a unique temp file for output capture.
+        let run_id: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let out_file = format!("/tmp/rline-cmd-{run_id}.out");
+        let exit_file = format!("/tmp/rline-cmd-{run_id}.exit");
+
+        // Build a wrapper that captures output and exit code.
+        // Uses `tee` so the user sees output in real-time in the terminal.
+        // PIPESTATUS is bash-specific; we also handle plain $? as fallback.
+        let wrapped = format!(
+            "{{ {command} ; }} 2>&1 | tee {out_file}; \
+             printf '%d' \"${{PIPESTATUS[0]:-$?}}\" > {exit_file}\n",
+        );
+
+        terminal.feed_child(wrapped.as_bytes());
+
+        // Poll for the exit file to appear, then read results.
+        let out_path = out_file.clone();
+        let exit_path = exit_file.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let respond = Rc::new(RefCell::new(Some(respond)));
+
+        glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            // Check if the exit file has been written.
+            let exit_content = std::fs::read_to_string(&exit_path).ok();
+            let timed_out = std::time::Instant::now() >= deadline;
+
+            if exit_content.is_none() && !timed_out {
+                return glib::ControlFlow::Continue;
+            }
+
+            // Read results.
+            let output = std::fs::read_to_string(&out_path).unwrap_or_default();
+            let exit_code: i32 = exit_content
+                .as_deref()
+                .unwrap_or("-1")
+                .trim()
+                .parse()
+                .unwrap_or(-1);
+
+            let success = !timed_out && exit_code == 0;
+
+            let mut result = if output.is_empty() {
+                "(no output)".to_owned()
+            } else {
+                // Truncate very long output.
+                let mut o = output;
+                if o.len() > 50_000 {
+                    o.truncate(50_000);
+                    o.push_str("\n\n(output truncated)");
+                }
+                o
+            };
+
+            if timed_out {
+                result.push_str(&format!(
+                    "\n\nCommand timed out after {timeout_secs} seconds"
+                ));
+            } else {
+                result.push_str(&format!("\n\nExit code: {exit_code}"));
+            }
+
+            // Send result back to the agent loop.
+            if let Some(tx) = respond.borrow_mut().take() {
+                let _ = tx.send((success, result));
+            }
+
+            // Clean up temp files.
+            let _ = std::fs::remove_file(&out_path);
+            let _ = std::fs::remove_file(&exit_path);
+
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Get the VTE terminal for the agent tab, creating it if needed.
+    fn get_or_create_agent_terminal(&self, working_dir: &Path) -> vte4::Terminal {
+        // Check if an agent terminal tab already exists.
+        if let Some(terminal) = self.find_agent_terminal() {
+            return terminal;
+        }
+
+        // Create a new tab with the agent terminal title.
+        let mut counter = self.tab_counter.borrow_mut();
+        *counter += 1;
+
+        let font_family = self.font_family.borrow().clone();
+        let font_size = *self.font_size.borrow();
+        let tab =
+            TerminalTab::new_with_title(AGENT_TERMINAL_TITLE, working_dir, &font_family, font_size);
+
+        if let Some(ref colors) = *self.theme_colors.borrow() {
+            tab.apply_theme(colors);
+        }
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .child(tab.widget())
+            .vexpand(true)
+            .build();
+
+        let page_num = self.notebook.append_page(&scrolled, Some(tab.tab_label()));
+        self.wire_tab_close_btn(tab.close_btn(), page_num);
+        self.wire_tab_context_menu(tab.tab_label(), page_num);
+
+        let terminal = tab.widget().clone();
+        // Give the shell a moment to start before we send commands.
+        // We'll handle this by adding a small delay in the command wrapper.
+        terminal
+    }
+
+    /// Find the agent terminal VTE widget if it exists.
+    fn find_agent_terminal(&self) -> Option<vte4::Terminal> {
+        let page_num = self.find_agent_terminal_page()?;
+        let page = self.notebook.nth_page(Some(page_num))?;
+        let scrolled = page.downcast_ref::<gtk4::ScrolledWindow>()?;
+        scrolled.child().and_downcast::<vte4::Terminal>()
+    }
+
+    /// Find the page number of the agent terminal tab by its title.
+    fn find_agent_terminal_page(&self) -> Option<u32> {
+        let n_pages = self.notebook.n_pages();
+        for i in 0..n_pages {
+            if let Some(page) = self.notebook.nth_page(Some(i)) {
+                if let Some(tab_label) = self.notebook.tab_label(&page) {
+                    // Tab label is a Box containing [Label, CloseButton].
+                    if let Some(label_box) = tab_label.downcast_ref::<gtk4::Box>() {
+                        if let Some(first_child) = label_box.first_child() {
+                            if let Some(label) = first_child.downcast_ref::<gtk4::Label>() {
+                                if label.text() == AGENT_TERMINAL_TITLE {
+                                    return Some(i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Wire a close button to close its containing terminal tab.

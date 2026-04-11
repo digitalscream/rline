@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Instant;
 
 use gtk4::prelude::*;
 use tokio_util::sync::CancellationToken;
@@ -30,6 +31,7 @@ pub struct AgentPanel {
     input_view: gtk4::TextView,
     send_button: gtk4::Button,
     stop_button: gtk4::Button,
+    continue_button: gtk4::Button,
     mode_dropdown: gtk4::DropDown,
     new_task_button: gtk4::Button,
     project_root: Rc<RefCell<Option<PathBuf>>>,
@@ -47,8 +49,28 @@ pub struct AgentPanel {
     /// Callback invoked when the agent edits a file and a diff should be shown.
     #[allow(clippy::type_complexity)]
     on_open_diff: Rc<RefCell<Option<Box<dyn Fn(&std::path::Path)>>>>,
+    /// Callback invoked when the agent needs to execute a command in the terminal.
+    #[allow(clippy::type_complexity)]
+    on_terminal_command: Rc<
+        RefCell<
+            Option<
+                Box<
+                    dyn Fn(
+                        &str,
+                        &std::path::Path,
+                        u64,
+                        tokio::sync::oneshot::Sender<(bool, String)>,
+                    ),
+                >,
+            >,
+        >,
+    >,
     /// Label showing context usage (e.g. "12k / 128k").
     context_label: gtk4::Label,
+    /// "Working..." indicator widget (removed when first response event arrives).
+    working_indicator: Rc<RefCell<Option<gtk4::Box>>>,
+    /// Source ID for the "Working..." dot animation timer.
+    working_timer: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
 impl std::fmt::Debug for AgentPanel {
@@ -92,6 +114,12 @@ impl AgentPanel {
         stop_button.add_css_class("flat");
         stop_button.set_sensitive(false);
         header_box.append(&stop_button);
+
+        let continue_button = gtk4::Button::from_icon_name("media-playback-start-symbolic");
+        continue_button.set_tooltip_text(Some("Continue"));
+        continue_button.add_css_class("flat");
+        continue_button.set_sensitive(false);
+        header_box.append(&continue_button);
 
         // Spacer to push context label to the right.
         let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
@@ -157,6 +185,7 @@ impl AgentPanel {
             input_view,
             send_button,
             stop_button,
+            continue_button,
             mode_dropdown,
             new_task_button,
             project_root: Rc::new(RefCell::new(None)),
@@ -167,7 +196,10 @@ impl AgentPanel {
             conversation_context: Arc::new(Mutex::new(None)),
             history_file: Arc::new(Mutex::new(None)),
             on_open_diff: Rc::new(RefCell::new(None)),
+            on_terminal_command: Rc::new(RefCell::new(None)),
             context_label,
+            working_indicator: Rc::new(RefCell::new(None)),
+            working_timer: Rc::new(RefCell::new(None)),
         };
 
         panel.connect_signals();
@@ -195,6 +227,17 @@ impl AgentPanel {
         *self.on_open_diff.borrow_mut() = Some(Box::new(f));
     }
 
+    /// Set a callback to be invoked when the agent needs to execute a command
+    /// in the terminal pane.
+    pub fn set_on_terminal_command<
+        F: Fn(&str, &std::path::Path, u64, tokio::sync::oneshot::Sender<(bool, String)>) + 'static,
+    >(
+        &self,
+        f: F,
+    ) {
+        *self.on_terminal_command.borrow_mut() = Some(Box::new(f));
+    }
+
     /// Connect button signals.
     fn connect_signals(&self) {
         // Send button.
@@ -217,12 +260,22 @@ impl AgentPanel {
         });
         self.input_view.add_controller(key_controller);
 
-        // Stop button.
-        let cancel = self.cancel_token.clone();
+        // Stop button — cancel the running agent.
+        let panel = self.clone();
         self.stop_button.connect_clicked(move |_| {
-            if let Some(token) = cancel.borrow().as_ref() {
+            if let Some(token) = panel.cancel_token.borrow().as_ref() {
                 token.cancel();
             }
+            // UI state is updated by the poll loop's Disconnected/Error handler,
+            // but we enable Continue immediately for responsiveness.
+            panel.continue_button.set_sensitive(true);
+            panel.continue_button.add_css_class("success");
+        });
+
+        // Continue button — resume the conversation after stopping.
+        let panel = self.clone();
+        self.continue_button.connect_clicked(move |_| {
+            panel.on_continue();
         });
 
         // New task button — clears the conversation.
@@ -230,6 +283,16 @@ impl AgentPanel {
         self.new_task_button.connect_clicked(move |_| {
             panel.clear_messages();
         });
+    }
+
+    /// Handle the continue action — resume the agent after stopping.
+    fn on_continue(&self) {
+        if *self.is_running.borrow() {
+            return;
+        }
+        self.continue_button.set_sensitive(false);
+        self.continue_button.remove_css_class("success");
+        self.start_agent("Continue from where you left off.".to_owned());
     }
 
     /// Handle the send action.
@@ -273,12 +336,16 @@ impl AgentPanel {
         *self.is_running.borrow_mut() = false;
         *self.current_ai_label.borrow_mut() = None;
         self.pending_tool_widgets.borrow_mut().clear();
+        remove_working_indicator(&self.working_indicator, &self.working_timer);
         *self
             .conversation_context
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = None;
         *self.history_file.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.stop_button.set_sensitive(false);
+        self.stop_button.remove_css_class("error");
+        self.continue_button.set_sensitive(false);
+        self.continue_button.remove_css_class("success");
         self.send_button.set_sensitive(true);
         self.input_view.set_sensitive(true);
     }
@@ -327,11 +394,22 @@ impl AgentPanel {
         *self.cancel_token.borrow_mut() = Some(cancel.clone());
         *self.is_running.borrow_mut() = true;
         self.stop_button.set_sensitive(true);
+        self.stop_button.add_css_class("error");
+        self.continue_button.set_sensitive(false);
+        self.continue_button.remove_css_class("success");
         self.send_button.set_sensitive(false);
         self.input_view.set_sensitive(false);
 
         // Don't pre-create an AI message widget — TextDelta creates one lazily.
         *self.current_ai_label.borrow_mut() = None;
+
+        // Show "Working..." indicator while waiting for the model response.
+        show_working_indicator(
+            &self.messages_box,
+            &self.scrolled,
+            &self.working_indicator,
+            &self.working_timer,
+        );
 
         // Create channels.
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>();
@@ -408,13 +486,18 @@ impl AgentPanel {
         let scrolled = self.scrolled.clone();
         let is_running = self.is_running.clone();
         let stop_btn = self.stop_button.clone();
+        let continue_btn = self.continue_button.clone();
         let send_btn = self.send_button.clone();
         let input_view = self.input_view.clone();
         let current_label = self.current_ai_label.clone();
         let pending = self.pending_tool_widgets.clone();
         let accumulated_text = Rc::new(RefCell::new(String::new()));
+        let text_run_start = Rc::new(RefCell::new(Instant::now()));
         let on_diff = self.on_open_diff.clone();
+        let on_terminal_cmd = self.on_terminal_command.clone();
         let ctx_label = self.context_label.clone();
+        let working_indicator = self.working_indicator.clone();
+        let working_timer = self.working_timer.clone();
 
         glib::idle_add_local(move || {
             match event_rx.try_recv() {
@@ -426,17 +509,30 @@ impl AgentPanel {
                         &current_label,
                         &pending,
                         &accumulated_text,
+                        &text_run_start,
                         &on_diff,
+                        &on_terminal_cmd,
                         &ctx_label,
+                        &working_indicator,
+                        &working_timer,
                     );
                     glib::ControlFlow::Continue
                 }
                 Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // Agent loop ended — finalize any remaining text.
-                    finalize_markdown(&current_label, &accumulated_text);
+                    finalize_markdown(
+                        &current_label,
+                        &accumulated_text,
+                        &text_run_start,
+                        &messages_box,
+                    );
+                    remove_working_indicator(&working_indicator, &working_timer);
                     *is_running.borrow_mut() = false;
                     stop_btn.set_sensitive(false);
+                    stop_btn.remove_css_class("error");
+                    continue_btn.set_sensitive(true);
+                    continue_btn.add_css_class("success");
                     send_btn.set_sensitive(true);
                     input_view.set_sensitive(true);
                     glib::ControlFlow::Break
@@ -455,13 +551,45 @@ fn handle_event(
     current_label: &Rc<RefCell<Option<gtk4::Label>>>,
     pending: &Rc<RefCell<Vec<(String, gtk4::Box, gtk4::Box)>>>,
     accumulated_text: &Rc<RefCell<String>>,
+    text_run_start: &Rc<RefCell<Instant>>,
     on_open_diff: &Rc<RefCell<Option<Box<dyn Fn(&std::path::Path)>>>>,
+    #[allow(clippy::type_complexity)] on_terminal_command: &Rc<
+        RefCell<
+            Option<
+                Box<
+                    dyn Fn(
+                        &str,
+                        &std::path::Path,
+                        u64,
+                        tokio::sync::oneshot::Sender<(bool, String)>,
+                    ),
+                >,
+            >,
+        >,
+    >,
     context_label: &gtk4::Label,
+    working_indicator: &Rc<RefCell<Option<gtk4::Box>>>,
+    working_timer: &Rc<RefCell<Option<glib::SourceId>>>,
 ) {
     match event {
         AgentEvent::TextDelta(delta) => {
+            // Remove "Working..." on first text delta.
+            remove_working_indicator(working_indicator, working_timer);
+
             let mut acc = accumulated_text.borrow_mut();
+            if acc.is_empty() {
+                // Start timing this text run.
+                *text_run_start.borrow_mut() = Instant::now();
+            }
             acc.push_str(&delta);
+
+            // Don't show streaming text while inside a thinking block —
+            // it will be collapsed into "Thought for X seconds" on finalize.
+            let acc_ref = &*acc;
+            if acc_ref.contains("<thinking>") && !acc_ref.contains("</thinking>") {
+                // Still inside a thinking block — skip updating the label.
+                return;
+            }
 
             // Lazily create the AI message widget on first text delta.
             if current_label.borrow().is_none() {
@@ -470,9 +598,10 @@ fn handle_event(
                 *current_label.borrow_mut() = Some(ai_label);
             }
 
-            // Show plain text while streaming — markdown applied when text run ends.
+            // Show the non-thinking portion as plain text while streaming.
+            let display = strip_thinking_blocks(acc_ref);
             if let Some(label) = current_label.borrow().as_ref() {
-                label.set_text(&acc);
+                label.set_text(&display);
             }
             scroll_to_bottom(scrolled);
         }
@@ -481,8 +610,16 @@ fn handle_event(
             name,
             arguments,
         } => {
+            // Remove "Working..." on tool call start.
+            remove_working_indicator(working_indicator, working_timer);
+
             // Finalize the current AI text with markdown formatting.
-            finalize_markdown(current_label, accumulated_text);
+            finalize_markdown(
+                current_label,
+                accumulated_text,
+                text_run_start,
+                messages_box,
+            );
 
             let widget = message_widget::build_tool_call(&name, &arguments);
             messages_box.append(&widget.container);
@@ -565,7 +702,26 @@ fn handle_event(
                 cb(&path);
             }
         }
+        AgentEvent::TerminalCommand {
+            command,
+            working_dir,
+            timeout_secs,
+            respond,
+            ..
+        } => {
+            if let Some(cb) = on_terminal_command.borrow().as_ref() {
+                cb(&command, &working_dir, timeout_secs, respond);
+            } else {
+                // No terminal available — fall back to error.
+                warn!("no terminal command handler, failing command");
+                let _ = respond.send((
+                    false,
+                    "No terminal available for command execution.".to_owned(),
+                ));
+            }
+        }
         AgentEvent::FollowupQuestion { question, respond } => {
+            remove_working_indicator(working_indicator, working_timer);
             let (container, text_view, submit) = message_widget::build_followup_question(&question);
             messages_box.append(&container);
 
@@ -623,17 +779,31 @@ fn handle_event(
         }
         AgentEvent::TurnComplete => {
             // Finalize markdown on the completed AI text.
-            finalize_markdown(current_label, accumulated_text);
+            finalize_markdown(
+                current_label,
+                accumulated_text,
+                text_run_start,
+                messages_box,
+            );
+            // Show "Working..." while waiting for the next model turn.
+            show_working_indicator(messages_box, scrolled, working_indicator, working_timer);
             scroll_to_bottom(scrolled);
         }
         AgentEvent::Error(msg) => {
+            remove_working_indicator(working_indicator, working_timer);
             let widget = message_widget::build_error(&msg);
             messages_box.append(&widget);
             scroll_to_bottom(scrolled);
         }
         AgentEvent::Finished { summary, plan_mode } => {
+            remove_working_indicator(working_indicator, working_timer);
             // Finalize markdown on any remaining AI text.
-            finalize_markdown(current_label, accumulated_text);
+            finalize_markdown(
+                current_label,
+                accumulated_text,
+                text_run_start,
+                messages_box,
+            );
 
             if let Some(summary) = summary {
                 let widget = message_widget::build_completion(&summary);
@@ -655,26 +825,159 @@ fn handle_event(
 ///
 /// Called when a text run ends (tool call starts, turn completes, or the agent
 /// finishes). Falls back to plain text if Pango markup parsing fails.
+///
+/// If the accumulated text contains `<thinking>...</thinking>` blocks, they are
+/// extracted into collapsible "Thought for X seconds" widgets. The AI label's
+/// parent container is repurposed: thinking widgets are inserted before the label,
+/// and only the non-thinking text is rendered in the label itself.
 fn finalize_markdown(
     current_label: &Rc<RefCell<Option<gtk4::Label>>>,
     accumulated_text: &Rc<RefCell<String>>,
+    text_run_start: &Rc<RefCell<Instant>>,
+    messages_box: &gtk4::Box,
 ) {
     let text = accumulated_text.borrow().clone();
     if text.is_empty() {
-        // Nothing to finalize — clear label ref so next TextDelta creates fresh.
         *current_label.borrow_mut() = None;
         return;
     }
 
-    if let Some(label) = current_label.borrow().as_ref() {
-        let pango = super::markdown::markdown_to_pango(&text);
-        // Try set_markup; the label already has set_text content as fallback
-        // so if set_markup fails (GTK logs a warning), the raw text remains visible.
-        label.set_markup(&pango);
+    let elapsed_secs = text_run_start.borrow().elapsed().as_secs();
+    let (thinking_blocks, visible_text) = extract_thinking_blocks(&text);
+
+    if thinking_blocks.is_empty() {
+        // No thinking blocks — simple path: apply markdown to the label.
+        if let Some(label) = current_label.borrow().as_ref() {
+            let pango = super::markdown::markdown_to_pango(&text);
+            label.set_markup(&pango);
+        }
+    } else {
+        // Has thinking blocks. Get the AI message container (label's parent Box).
+        let ai_container = current_label
+            .borrow()
+            .as_ref()
+            .and_then(|l| l.parent())
+            .and_then(|p| p.downcast::<gtk4::Box>().ok());
+
+        if let Some(container) = ai_container {
+            // The container is a vertical Box with [header_label, content_label].
+            // Insert thinking widgets between header and content label.
+            let header = container.first_child();
+
+            for content in &thinking_blocks {
+                let widget = message_widget::build_thinking_block(content, elapsed_secs);
+                container.insert_child_after(&widget, header.as_ref());
+            }
+        } else {
+            // Fallback: append thinking blocks directly to messages_box.
+            for content in &thinking_blocks {
+                let widget = message_widget::build_thinking_block(content, elapsed_secs);
+                messages_box.append(&widget);
+            }
+        }
+
+        // Update the label with just the visible (non-thinking) text.
+        if let Some(label) = current_label.borrow().as_ref() {
+            let trimmed = visible_text.trim();
+            if trimmed.is_empty() {
+                label.set_visible(false);
+            } else {
+                let pango = super::markdown::markdown_to_pango(trimmed);
+                label.set_markup(&pango);
+            }
+        }
     }
 
     accumulated_text.borrow_mut().clear();
     *current_label.borrow_mut() = None;
+}
+
+/// Extract `<thinking>...</thinking>` blocks from text.
+///
+/// Returns a vector of thinking block contents and the remaining visible text
+/// with thinking blocks removed.
+fn extract_thinking_blocks(text: &str) -> (Vec<String>, String) {
+    let mut blocks = Vec::new();
+    let mut visible = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    loop {
+        match remaining.find("<thinking>") {
+            Some(start) => {
+                // Text before the thinking block is visible.
+                visible.push_str(&remaining[..start]);
+
+                let after_open = &remaining[start + "<thinking>".len()..];
+                match after_open.find("</thinking>") {
+                    Some(end) => {
+                        blocks.push(after_open[..end].trim().to_owned());
+                        remaining = &after_open[end + "</thinking>".len()..];
+                    }
+                    None => {
+                        // Unclosed thinking block — treat the rest as thinking.
+                        blocks.push(after_open.trim().to_owned());
+                        break;
+                    }
+                }
+            }
+            None => {
+                visible.push_str(remaining);
+                break;
+            }
+        }
+    }
+
+    (blocks, visible)
+}
+
+/// Strip thinking blocks from text for display during streaming.
+fn strip_thinking_blocks(text: &str) -> String {
+    let (_, visible) = extract_thinking_blocks(text);
+    visible
+}
+
+/// Show the "Working..." indicator in the messages box with animated dots.
+fn show_working_indicator(
+    messages_box: &gtk4::Box,
+    scrolled: &gtk4::ScrolledWindow,
+    working_indicator: &Rc<RefCell<Option<gtk4::Box>>>,
+    working_timer: &Rc<RefCell<Option<glib::SourceId>>>,
+) {
+    // Remove any existing indicator first.
+    remove_working_indicator(working_indicator, working_timer);
+
+    let (container, label) = message_widget::build_working_indicator();
+    messages_box.append(&container);
+    *working_indicator.borrow_mut() = Some(container);
+    scroll_to_bottom(scrolled);
+
+    // Cycle dots every 500ms: "Working." → "Working.." → "Working..." → repeat.
+    let dot_count = Rc::new(RefCell::new(1u8));
+    let source_id = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        let mut count = dot_count.borrow_mut();
+        *count = (*count % 3) + 1;
+        let dots = ".".repeat(*count as usize);
+        label.set_markup(&format!("<i>Working{dots}</i>"));
+        glib::ControlFlow::Continue
+    });
+    *working_timer.borrow_mut() = Some(source_id);
+}
+
+/// Remove the "Working..." indicator and stop its animation timer.
+fn remove_working_indicator(
+    working_indicator: &Rc<RefCell<Option<gtk4::Box>>>,
+    working_timer: &Rc<RefCell<Option<glib::SourceId>>>,
+) {
+    if let Some(timer_id) = working_timer.borrow_mut().take() {
+        timer_id.remove();
+    }
+    if let Some(widget) = working_indicator.borrow_mut().take() {
+        if let Some(parent) = widget.parent() {
+            if let Some(parent_box) = parent.downcast_ref::<gtk4::Box>() {
+                parent_box.remove(&widget);
+            }
+        }
+    }
 }
 
 /// Scroll a `ScrolledWindow` to the bottom.

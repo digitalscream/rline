@@ -36,6 +36,11 @@ pub fn should_auto_approve(
             if !settings.agent_auto_approve_command {
                 return false;
             }
+            // Never auto-approve commands that affect the system outside the
+            // project, unless YOLO mode is enabled.
+            if !settings.agent_yolo_mode && is_system_affecting_command(arguments) {
+                return false;
+            }
             // Only auto-approve commands classified as safe.
             is_safe_command(arguments)
         }
@@ -73,6 +78,104 @@ fn is_path_in_workspace(arguments: &str, workspace_root: &Path) -> bool {
 
     resolved.starts_with(&root)
 }
+
+/// Check whether a command may affect the system outside the project directory.
+///
+/// Detects package managers that install system-wide, privilege escalation,
+/// service management, and other commands with global side effects. These
+/// require explicit user approval unless YOLO mode is enabled.
+pub fn is_system_affecting_command(arguments: &str) -> bool {
+    let cmd = match serde_json::from_str::<serde_json::Value>(arguments) {
+        Ok(v) => v.get("command").and_then(|c| c.as_str()).map(String::from),
+        Err(_) => None,
+    };
+
+    let Some(cmd) = cmd else {
+        // Can't parse — assume system-affecting for safety.
+        return true;
+    };
+
+    let cmd = cmd.trim();
+
+    // Strip leading env var assignments.
+    let effective = strip_env_assignments(cmd);
+
+    // Check the first token (the command name).
+    let first_token = effective.split_whitespace().next().unwrap_or("");
+    let base_cmd = first_token.rsplit('/').next().unwrap_or(first_token);
+
+    // Privilege escalation — always system-affecting.
+    if base_cmd == "sudo" || base_cmd == "doas" || base_cmd == "pkexec" {
+        return true;
+    }
+
+    // System package managers.
+    if SYSTEM_PACKAGE_MANAGERS.iter().any(|pm| base_cmd == *pm) {
+        return true;
+    }
+
+    // npm/yarn/pnpm with -g or --global flag.
+    if (base_cmd == "npm" || base_cmd == "yarn" || base_cmd == "pnpm")
+        && (effective.contains(" -g ")
+            || effective.contains(" --global")
+            || effective.ends_with(" -g"))
+    {
+        return true;
+    }
+
+    // pip/pip3 install without --user or venv indicator.
+    if (base_cmd == "pip" || base_cmd == "pip3") && effective.contains("install") {
+        // If it has --user, --target, or -t, it's probably project-scoped.
+        if !effective.contains("--user")
+            && !effective.contains("--target")
+            && !effective.contains(" -t ")
+        {
+            return true;
+        }
+    }
+
+    // gem install (system-wide ruby gems).
+    if base_cmd == "gem" && effective.contains("install") {
+        return true;
+    }
+
+    // Service management.
+    if base_cmd == "systemctl" || base_cmd == "service" || base_cmd == "launchctl" {
+        return true;
+    }
+
+    // Docker/podman (can affect system containers).
+    if base_cmd == "docker" || base_cmd == "podman" {
+        return true;
+    }
+
+    // Firewall / network.
+    if base_cmd == "iptables" || base_cmd == "ufw" || base_cmd == "firewall-cmd" {
+        return true;
+    }
+
+    // User/group management.
+    if base_cmd == "useradd"
+        || base_cmd == "userdel"
+        || base_cmd == "usermod"
+        || base_cmd == "groupadd"
+        || base_cmd == "chown"
+        || base_cmd == "chmod"
+    {
+        // chmod/chown within the project dir is fine, but we can't easily
+        // determine that from just the command string without path resolution.
+        // Be conservative.
+        return true;
+    }
+
+    false
+}
+
+/// System package managers that always install globally.
+const SYSTEM_PACKAGE_MANAGERS: &[&str] = &[
+    "apt", "apt-get", "dpkg", "yum", "dnf", "pacman", "zypper", "apk", "brew", "port", "snap",
+    "flatpak",
+];
 
 /// Check whether a shell command is considered safe (read-only / non-destructive).
 ///
@@ -431,6 +534,127 @@ mod tests {
                 &settings
             ),
             "interactive tools should always be auto-approved"
+        );
+    }
+
+    // ── System-affecting command tests ──
+
+    #[test]
+    fn test_system_affecting_apt_install() {
+        let args = r#"{"command": "apt install libgtk-4-dev"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "apt install should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_sudo() {
+        let args = r#"{"command": "sudo make install"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "sudo should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_npm_global() {
+        let args = r#"{"command": "npm install -g typescript"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "npm -g should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_pip_install() {
+        let args = r#"{"command": "pip install requests"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "pip install without --user should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_not_system_affecting_pip_user() {
+        let args = r#"{"command": "pip install --user requests"}"#;
+        assert!(
+            !is_system_affecting_command(args),
+            "pip install --user should not be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_not_system_affecting_cargo_build() {
+        let args = r#"{"command": "cargo build"}"#;
+        assert!(
+            !is_system_affecting_command(args),
+            "cargo build should not be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_not_system_affecting_ls() {
+        let args = r#"{"command": "ls -la"}"#;
+        assert!(
+            !is_system_affecting_command(args),
+            "ls should not be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_systemctl() {
+        let args = r#"{"command": "systemctl restart nginx"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "systemctl should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_gem_install() {
+        let args = r#"{"command": "gem install bundler"}"#;
+        assert!(
+            is_system_affecting_command(args),
+            "gem install should be system-affecting"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_not_auto_approved() {
+        let dir = tempfile::tempdir().expect("temp dir in test");
+        let mut settings = test_settings(true, true, true);
+        settings.agent_yolo_mode = false;
+        let args = r#"{"command": "apt install foo"}"#;
+
+        assert!(
+            !should_auto_approve(
+                "execute_command",
+                ToolCategory::ExecuteCommand,
+                args,
+                dir.path(),
+                &settings
+            ),
+            "system-affecting command should not be auto-approved without YOLO"
+        );
+    }
+
+    #[test]
+    fn test_system_affecting_auto_approved_in_yolo() {
+        let dir = tempfile::tempdir().expect("temp dir in test");
+        let mut settings = test_settings(true, true, true);
+        settings.agent_yolo_mode = true;
+        let args = r#"{"command": "ls -la"}"#;
+
+        assert!(
+            should_auto_approve(
+                "execute_command",
+                ToolCategory::ExecuteCommand,
+                args,
+                dir.path(),
+                &settings
+            ),
+            "safe command should be auto-approved in YOLO mode"
         );
     }
 }

@@ -144,6 +144,7 @@ impl SettingsDialog {
                     agent_auto_approve_read: ap.auto_approve_read_switch.is_active(),
                     agent_auto_approve_edit: ap.auto_approve_edit_switch.is_active(),
                     agent_auto_approve_command: ap.auto_approve_command_switch.is_active(),
+                    agent_yolo_mode: ap.yolo_mode_switch.is_active(),
                     agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
                     agent_context_length: ap.context_length_spin.value() as u32,
                     agent_max_turns: ap.max_turns_spin.value() as u32,
@@ -622,6 +623,17 @@ impl SettingsDialog {
         auto_approve_command_switch.set_valign(gtk4::Align::Center);
         approve_command_row.append(&auto_approve_command_switch);
 
+        // YOLO mode
+        let yolo_row = Self::make_row("YOLO mode (skip system command approval)");
+        let yolo_mode_switch = gtk4::Switch::new();
+        yolo_mode_switch.set_active(settings.agent_yolo_mode);
+        yolo_mode_switch.set_valign(gtk4::Align::Center);
+        yolo_mode_switch.set_tooltip_text(Some(
+            "When enabled, commands that affect the system outside the project \
+             (apt, sudo, global installs, etc.) will not require approval.",
+        ));
+        yolo_row.append(&yolo_mode_switch);
+
         content.append(&endpoint_row);
         content.append(&api_key_row);
         content.append(&model_row);
@@ -635,6 +647,7 @@ impl SettingsDialog {
         content.append(&approve_read_row);
         content.append(&approve_edit_row);
         content.append(&approve_command_row);
+        content.append(&yolo_row);
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(&content)
@@ -655,6 +668,7 @@ impl SettingsDialog {
             auto_approve_read_switch,
             auto_approve_edit_switch,
             auto_approve_command_switch,
+            yolo_mode_switch,
         }
     }
 
@@ -1134,4 +1148,5 @@ struct AgentPageWidgets {
     auto_approve_read_switch: gtk4::Switch,
     auto_approve_edit_switch: gtk4::Switch,
     auto_approve_command_switch: gtk4::Switch,
+    yolo_mode_switch: gtk4::Switch,
 }
