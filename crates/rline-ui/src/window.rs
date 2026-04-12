@@ -745,6 +745,22 @@ impl RlineWindow {
             pending.remove();
         }
 
+        // If the project has no git repository, disable the Git tab and bail.
+        let git_dir = root.join(".git");
+        if let Some(ref stack) = *imp.left_stack.borrow() {
+            if let Some(child) = stack.child_by_name("git") {
+                let page = stack.page(&child);
+                if git_dir.exists() {
+                    page.set_title("Git");
+                    child.set_sensitive(true);
+                } else {
+                    page.set_title("Git");
+                    child.set_sensitive(false);
+                    return;
+                }
+            }
+        }
+
         // Initial refresh.
         self.refresh_git_panel();
 

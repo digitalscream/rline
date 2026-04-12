@@ -398,11 +398,25 @@ impl GitPanel {
     }
 
     /// Refresh git status from the repository.
+    ///
+    /// Does nothing if no project root is set or if the project has no git
+    /// repository (no `.git` directory).
     pub fn refresh(&self) {
         let root = match self.project_root.borrow().clone() {
             Some(r) => r,
             None => return,
         };
+
+        // Skip refresh entirely for non-git projects.
+        if !root.join(".git").exists() {
+            self.branch_label.set_text("No repository");
+            self.cached_status.replace(None);
+            self.status_store.remove_all();
+            if let Some(ref cb) = *self.on_status_refreshed.borrow() {
+                cb(0);
+            }
+            return;
+        }
 
         let (sender, receiver) = std::sync::mpsc::channel::<Result<GitStatusResult, String>>();
 
