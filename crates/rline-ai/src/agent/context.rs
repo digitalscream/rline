@@ -223,10 +223,13 @@ fn find_exchange_end(messages: &[ChatMessage]) -> usize {
 ///
 /// Automatically discovers and includes `.clinerules` and `memory-bank`
 /// content from the workspace root, matching Cline's behavior.
+/// If `mcp_tool_summary` is non-empty, it is appended to inform the model
+/// about available MCP tools.
 pub fn build_system_prompt(
     workspace_root: &str,
     mode: &str,
     custom_prompt: Option<&str>,
+    mcp_tool_summary: Option<&str>,
 ) -> String {
     let base = custom_prompt.unwrap_or(DEFAULT_SYSTEM_PROMPT);
 
@@ -258,6 +261,19 @@ pub fn build_system_prompt(
     if !memory.is_empty() {
         prompt.push_str("\n\n## Memory Bank\n\n");
         prompt.push_str(&memory);
+    }
+
+    // ── MCP tools ──
+    if let Some(summary) = mcp_tool_summary {
+        if !summary.is_empty() {
+            prompt.push_str("\n\n## External Tools (MCP Servers)\n\n");
+            prompt.push_str(
+                "The following tools are provided by external MCP servers. \
+                 Use them when they can help accomplish the user's task. \
+                 They are available as regular tools in your tool list.\n\n",
+            );
+            prompt.push_str(summary);
+        }
     }
 
     prompt
@@ -369,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_contains_workspace() {
-        let prompt = build_system_prompt("/home/user/project", "ACT", None);
+        let prompt = build_system_prompt("/home/user/project", "ACT", None, None);
         assert!(prompt.contains("/home/user/project"));
         assert!(prompt.contains("ACT"));
     }
@@ -377,7 +393,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_custom_overrides_default() {
         let custom = "You are a helpful pirate assistant.";
-        let prompt = build_system_prompt("/tmp/proj", "PLAN", Some(custom));
+        let prompt = build_system_prompt("/tmp/proj", "PLAN", Some(custom), None);
         assert!(
             prompt.contains(custom),
             "custom prompt text should appear in output"

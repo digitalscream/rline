@@ -432,6 +432,30 @@ impl AgentPanel {
         let ctx_arc = self.conversation_context.clone();
         let hist_arc = self.history_file.clone();
         rline_ai::ai_runtime().spawn(async move {
+            // Start MCP servers and discover tools.
+            let global_mcp_path = rline_config::paths::mcp_config_path().ok();
+            let mcp_manager = rline_ai::mcp::manager::McpManager::from_workspace(
+                global_mcp_path.as_deref(),
+                &ws_root2,
+            )
+            .await;
+            let (mcp_tools, mcp_mgr_arc, mcp_tool_summary) = match mcp_manager {
+                Ok(mgr) => {
+                    let tools = mgr.discover_tools().await;
+                    let summary = rline_ai::mcp::manager::build_tool_summary(&tools);
+                    let arc = if mgr.has_servers() {
+                        Some(std::sync::Arc::new(tokio::sync::Mutex::new(mgr)))
+                    } else {
+                        None
+                    };
+                    (tools, arc, summary)
+                }
+                Err(e) => {
+                    tracing::warn!("failed to start MCP servers: {e}");
+                    (Vec::new(), None, None)
+                }
+            };
+
             let existing_ctx = ctx_arc.lock().unwrap_or_else(|e| e.into_inner()).take();
 
             let agent = match existing_ctx {
@@ -446,6 +470,8 @@ impl AgentPanel {
                     max_tokens,
                     temperature,
                     max_turns,
+                    mcp_tools,
+                    mcp_mgr_arc,
                 ),
                 None => {
                     // Load custom system prompt from config dir if it exists.
@@ -471,6 +497,9 @@ impl AgentPanel {
                         max_context,
                         custom_prompt,
                         max_turns,
+                        mcp_tools,
+                        mcp_mgr_arc,
+                        mcp_tool_summary,
                     )
                 }
             };

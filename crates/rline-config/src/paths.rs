@@ -15,6 +15,11 @@ pub fn system_prompt_path() -> Result<PathBuf, ConfigError> {
     Ok(config_dir()?.join("system_prompt.md"))
 }
 
+/// Returns the path to the global MCP server config (`~/.config/rline/mcp.json`).
+pub fn mcp_config_path() -> Result<PathBuf, ConfigError> {
+    Ok(config_dir()?.join("mcp.json"))
+}
+
 /// Returns the GtkSourceView 5 user styles directory.
 ///
 /// This is where custom style scheme XML files should be installed so that

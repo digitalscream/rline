@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -21,7 +21,8 @@ use crate::agent::context::{build_system_prompt, ConversationContext};
 use crate::agent::event::AgentEvent;
 use crate::chat::client::{ChatClient, StreamEvent};
 use crate::chat::types::ToolCall;
-use crate::tools::{ToolCategory, ToolRegistry, ToolResult};
+use crate::mcp::manager::McpManager;
+use crate::tools::{Tool, ToolCategory, ToolRegistry, ToolResult};
 
 /// The agent's operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,9 @@ pub struct AgentLoop {
     temperature: Option<f64>,
     /// Maximum number of tool-use turns before forcing a stop.
     max_turns: usize,
+    /// MCP server manager — held to keep server processes alive for the
+    /// duration of the agent loop. Cleanup happens via `McpClient::Drop`.
+    _mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
 }
 
 impl AgentLoop {
@@ -73,6 +77,9 @@ impl AgentLoop {
         max_context_tokens: usize,
         custom_system_prompt: Option<String>,
         max_turns: usize,
+        mcp_tools: Vec<Box<dyn Tool>>,
+        mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
+        mcp_tool_summary: Option<String>,
     ) -> Self {
         let mode_str = match mode {
             AgentMode::Plan => "PLAN",
@@ -82,12 +89,13 @@ impl AgentLoop {
             &workspace_root.to_string_lossy(),
             mode_str,
             custom_system_prompt.as_deref(),
+            mcp_tool_summary.as_deref(),
         );
 
         Self {
             client,
             context: ConversationContext::new(system_prompt, max_context_tokens),
-            registry: ToolRegistry::new(),
+            registry: ToolRegistry::with_extra_tools(mcp_tools),
             mode,
             event_tx,
             auto_approve,
@@ -96,6 +104,7 @@ impl AgentLoop {
             max_tokens,
             temperature,
             max_turns,
+            _mcp_manager: mcp_manager,
         }
     }
 
@@ -112,11 +121,13 @@ impl AgentLoop {
         max_tokens: Option<u32>,
         temperature: Option<f64>,
         max_turns: usize,
+        mcp_tools: Vec<Box<dyn Tool>>,
+        mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
     ) -> Self {
         Self {
             client,
             context,
-            registry: ToolRegistry::new(),
+            registry: ToolRegistry::with_extra_tools(mcp_tools),
             mode,
             event_tx,
             auto_approve,
@@ -125,6 +136,7 @@ impl AgentLoop {
             max_tokens,
             temperature,
             max_turns,
+            _mcp_manager: mcp_manager,
         }
     }
 
@@ -375,10 +387,9 @@ impl AgentLoop {
                     let name = tool_name.clone();
                     let args = tool_args.clone();
                     let root = self.workspace_root.clone();
-                    let handle = tokio::task::spawn_blocking(move || {
-                        let registry = ToolRegistry::new();
-                        registry.execute(&name, &args, &root)
-                    });
+                    let registry = self.registry.clone();
+                    let handle =
+                        tokio::task::spawn_blocking(move || registry.execute(&name, &args, &root));
 
                     tokio::select! {
                         result = handle => {
