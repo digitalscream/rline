@@ -46,13 +46,22 @@ impl FileBrowserPanel {
     pub fn new() -> Self {
         let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
-        // Browse button
+        // Browse + refresh buttons
+        let button_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        button_row.set_margin_top(4);
+        button_row.set_margin_bottom(4);
+        button_row.set_margin_start(4);
+        button_row.set_margin_end(4);
+
         let browse_btn = gtk4::Button::with_label("Browse");
-        browse_btn.set_margin_top(4);
-        browse_btn.set_margin_bottom(4);
-        browse_btn.set_margin_start(4);
-        browse_btn.set_margin_end(4);
-        container.append(&browse_btn);
+        browse_btn.set_hexpand(true);
+        button_row.append(&browse_btn);
+
+        let refresh_btn = gtk4::Button::from_icon_name("view-refresh-symbolic");
+        refresh_btn.set_tooltip_text(Some("Refresh file tree"));
+        button_row.append(&refresh_btn);
+
+        container.append(&button_row);
 
         // File tree list view (starts empty)
         let selection = gtk4::SingleSelection::new(None::<gtk4::TreeListModel>);
@@ -146,6 +155,13 @@ impl FileBrowserPanel {
                     }
                 }
             });
+        });
+
+        // Wire refresh button
+        let root_for_refresh = panel.project_root.clone();
+        let lv_for_refresh = list_view.clone();
+        refresh_btn.connect_clicked(move |_| {
+            refresh_tree(&root_for_refresh, &lv_for_refresh);
         });
 
         // Wire single-click to open files via selection change

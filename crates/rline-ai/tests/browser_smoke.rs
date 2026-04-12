@@ -41,16 +41,26 @@ fn smoke_scroll_boundary_detection() {
             .expect("launch");
 
         let first = session.scroll(600).await.expect("scroll 1");
-        println!("scroll 1: before={} after={} max={}", first.before_y, first.after_y, first.max_y);
+        println!(
+            "scroll 1: before={} after={} max={}",
+            first.before_y, first.after_y, first.max_y
+        );
         assert!(first.moved(), "first scroll should move");
-        assert!(!first.at_bottom(), "first scroll should not be at bottom yet");
+        assert!(
+            !first.at_bottom(),
+            "first scroll should not be at bottom yet"
+        );
 
         // Scroll to bottom in big steps.
         for i in 2..=8 {
             let s = session.scroll(600).await.expect("scroll n");
             println!(
                 "scroll {i}: before={} after={} max={} at_bottom={} moved={}",
-                s.before_y, s.after_y, s.max_y, s.at_bottom(), s.moved()
+                s.before_y,
+                s.after_y,
+                s.max_y,
+                s.at_bottom(),
+                s.moved()
             );
             if s.at_bottom() {
                 break;
@@ -59,8 +69,16 @@ fn smoke_scroll_boundary_detection() {
 
         // One more scroll past the bottom should report no movement.
         let stuck = session.scroll(600).await.expect("scroll stuck");
-        println!("stuck: before={} after={} moved={}", stuck.before_y, stuck.after_y, stuck.moved());
-        assert!(!stuck.moved(), "scrolling past bottom must not move the page");
+        println!(
+            "stuck: before={} after={} moved={}",
+            stuck.before_y,
+            stuck.after_y,
+            stuck.moved()
+        );
+        assert!(
+            !stuck.moved(),
+            "scrolling past bottom must not move the page"
+        );
         assert!(stuck.at_bottom(), "should report at_bottom");
 
         session.close().await.expect("close");

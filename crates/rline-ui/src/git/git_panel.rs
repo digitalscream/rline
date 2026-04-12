@@ -17,6 +17,7 @@ use super::git_worker::{self, GitStatusResult};
 pub struct GitPanel {
     container: gtk4::Box,
     list_view: gtk4::ListView,
+    stash_button: gtk4::Button,
     status_store: gio::ListStore,
     project_root: Rc<RefCell<Option<PathBuf>>>,
     // Callback: user clicked a file to view its diff (path, is_staged).
@@ -62,6 +63,11 @@ impl GitPanel {
         branch_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         branch_label.add_css_class("heading");
         header_box.append(&branch_label);
+
+        let stash_button = gtk4::Button::from_icon_name("drive-harddisk-symbolic");
+        stash_button.set_tooltip_text(Some("Stash Changes"));
+        stash_button.add_css_class("flat");
+        header_box.append(&stash_button);
 
         let refresh_button = gtk4::Button::from_icon_name("view-refresh-symbolic");
         refresh_button.set_tooltip_text(Some("Refresh"));
@@ -135,6 +141,7 @@ impl GitPanel {
         let panel = Self {
             container,
             list_view: list_view.clone(),
+            stash_button: stash_button.clone(),
             status_store: status_store.clone(),
             project_root: Rc::new(RefCell::new(None)),
             on_open_diff: Rc::new(RefCell::new(None)),
@@ -678,6 +685,57 @@ impl GitPanel {
         });
     }
 
+    /// Prompt the user and then stash local changes.
+    ///
+    /// Presents a dialog offering to stash tracked modifications only, or
+    /// additionally include new/untracked files.
+    pub fn stash(&self, parent_window: Option<&gtk4::Window>) {
+        let root = match self.project_root.borrow().clone() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let dialog = gtk4::AlertDialog::builder()
+            .message("Stash Changes")
+            .detail("Stash tracked modifications only, or also include new and untracked files?")
+            .buttons(["Cancel", "Tracked only", "Include untracked"])
+            .cancel_button(0)
+            .default_button(1)
+            .modal(true)
+            .build();
+
+        let panel = self.clone();
+        let window = parent_window.cloned();
+        dialog.choose(window.as_ref(), gio::Cancellable::NONE, move |result| {
+            let include_untracked = match result {
+                Ok(1) => false,
+                Ok(2) => true,
+                _ => return,
+            };
+
+            let (sender, receiver) = std::sync::mpsc::channel::<Result<(), String>>();
+            let r = root.clone();
+            std::thread::spawn(move || {
+                let result = git_worker::stash(&r, include_untracked).map_err(|e| e.to_string());
+                let _ = sender.send(result);
+            });
+
+            let p = panel.clone();
+            glib::idle_add_local(move || match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    p.refresh();
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("git stash failed: {e}");
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            });
+        });
+    }
+
     /// Commit staged changes with the given message and refresh.
     pub fn commit(&self, message: &str) {
         let root = match self.project_root.borrow().clone() {
@@ -758,6 +816,13 @@ impl GitPanel {
     /// methods. This must be called after the panel is fully constructed because
     /// it needs a reference to the parent window for the discard confirmation dialog.
     pub fn wire_action_buttons(&self, window: &gtk4::ApplicationWindow) {
+        // Header-level stash button.
+        let panel_for_stash = self.clone();
+        let win_for_stash = window.clone();
+        self.stash_button.connect_clicked(move |_| {
+            panel_for_stash.stash(Some(win_for_stash.upcast_ref::<gtk4::Window>()));
+        });
+
         let panel = self.clone();
         let win = window.clone();
 

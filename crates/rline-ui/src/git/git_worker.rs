@@ -686,6 +686,23 @@ pub fn checkout_branch(root: &Path, branch_name: &str) -> Result<(), git2::Error
     Ok(())
 }
 
+/// Save local modifications to a new stash entry.
+///
+/// When `include_untracked` is true, new/untracked files are also stashed
+/// (equivalent to `git stash --include-untracked`). Tracked modifications
+/// and deletions are always stashed regardless of this flag.
+pub fn stash(root: &Path, include_untracked: bool) -> Result<(), git2::Error> {
+    let mut repo = git2::Repository::discover(root)?;
+    let sig = repo.signature()?;
+    let flags = if include_untracked {
+        Some(git2::StashFlags::INCLUDE_UNTRACKED)
+    } else {
+        None
+    };
+    repo.stash_save2(&sig, None, flags)?;
+    Ok(())
+}
+
 /// Create a commit with the given message from the current index.
 pub fn commit(root: &Path, message: &str) -> Result<(), git2::Error> {
     let repo = git2::Repository::discover(root)?;
