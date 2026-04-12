@@ -17,6 +17,7 @@ pub mod client;
 pub mod error;
 pub mod mcp;
 pub mod runtime;
+pub mod skills;
 pub mod tools;
 pub mod types;
 

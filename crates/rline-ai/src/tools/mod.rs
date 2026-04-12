@@ -15,6 +15,7 @@ pub mod plan_mode_respond;
 pub mod read_file;
 pub mod replace_in_file;
 pub mod search_files;
+pub mod use_skill;
 pub mod write_to_file;
 
 use std::path::Path;
@@ -238,6 +239,7 @@ impl ToolRegistryBuilder {
             Box::new(ask_followup_question::AskFollowupQuestionTool),
             Box::new(attempt_completion::AttemptCompletionTool),
             Box::new(plan_mode_respond::PlanModeRespondTool),
+            Box::new(use_skill::UseSkillTool),
         ];
         if let Some(cfg) = self.browser {
             tools.push(Box::new(browser_action::BrowserActionTool::new(
