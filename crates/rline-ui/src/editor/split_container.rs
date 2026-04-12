@@ -192,6 +192,11 @@ impl SplitContainer {
         self.get_active_pane().trigger_completion();
     }
 
+    /// Toggle line comments on the active pane's current tab.
+    pub fn toggle_line_comment(&self) {
+        self.get_active_pane().toggle_line_comment();
+    }
+
     /// Apply settings to all panes.
     pub fn apply_settings(&self, settings: &EditorSettings) {
         tracing::info!(

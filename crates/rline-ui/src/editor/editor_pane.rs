@@ -443,6 +443,16 @@ impl EditorPane {
         }
     }
 
+    /// Toggle line comments on the current tab's selection (or current line).
+    pub fn toggle_line_comment(&self) {
+        if let Some(page) = self.notebook.current_page() {
+            let tabs = self.tabs.borrow();
+            if let Some(TabKind::Editor(tab)) = tabs.get(page as usize) {
+                tab.toggle_line_comment();
+            }
+        }
+    }
+
     /// The number of open tabs in this pane.
     pub fn tab_count(&self) -> usize {
         self.tabs.borrow().len()

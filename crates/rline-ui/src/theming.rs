@@ -238,23 +238,33 @@ pub fn apply_app_theme(scheme_id: &str) {
                     -gtk-icon-size: 14px;
                 }}
 
-                /* ── Left pane: stack switcher + panels ── */
-                stackswitcher {{
+                /* ── Left pane: vertical icon nav bar + panels ── */
+                box.left-nav {{
                     background: {chrome_darker};
+                    padding: 4px 0;
                 }}
-                stackswitcher > button {{
-                    background: {chrome_darker};
+                box.left-nav > button {{
+                    background: transparent;
                     color: {sidebar_fg};
                     border: none;
                     box-shadow: none;
                     border-radius: 0;
+                    min-height: 36px;
+                    min-width: 36px;
+                    padding: 6px;
+                    margin: 0;
                 }}
-                stackswitcher > button:hover {{
-                    background: {chrome};
-                }}
-                stackswitcher > button:checked {{
+                box.left-nav > button:hover {{
                     background: {chrome};
                     color: {fg};
+                }}
+                box.left-nav > button:checked {{
+                    background: {chrome};
+                    color: {fg};
+                    box-shadow: inset 2px 0 0 {fg};
+                }}
+                box.left-nav > button image {{
+                    -gtk-icon-size: 18px;
                 }}
                 stack {{
                     background-color: {chrome};

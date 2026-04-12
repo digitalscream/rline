@@ -142,7 +142,7 @@ impl RlineWindow {
 
         self.set_titlebar(Some(&header));
 
-        // ── Left pane: Stack with three tabs ──
+        // ── Left pane: vertical icon bar + stack ──
         let stack = gtk4::Stack::new();
         stack.set_transition_type(gtk4::StackTransitionType::SlideUpDown);
 
@@ -154,13 +154,74 @@ impl RlineWindow {
         stack.add_titled(git_panel.widget(), Some("git"), "Git");
         stack.add_titled(search_panel.widget(), Some("search"), "Search");
 
-        let switcher = gtk4::StackSwitcher::new();
-        switcher.set_stack(Some(&stack));
+        let nav_bar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        nav_bar.add_css_class("left-nav");
+        nav_bar.set_width_request(40);
+        nav_bar.set_vexpand(true);
 
-        let left_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        left_box.append(&switcher);
-        left_box.append(&stack);
+        let nav_entries = [
+            ("files", "folder-symbolic", "Files"),
+            ("git", "media-playlist-consecutive-symbolic", "Git"),
+            ("search", "system-search-symbolic", "Search"),
+        ];
+        let nav_buttons: Vec<(String, gtk4::ToggleButton)> = nav_entries
+            .iter()
+            .map(|(name, icon, tooltip)| {
+                let button = gtk4::ToggleButton::new();
+                button.set_icon_name(icon);
+                button.set_tooltip_text(Some(tooltip));
+                button.set_has_frame(false);
+                nav_bar.append(&button);
+                ((*name).to_string(), button)
+            })
+            .collect();
+
+        if let Some((_, first)) = nav_buttons.first() {
+            first.set_active(true);
+        }
+
+        for (name, button) in &nav_buttons {
+            let name = name.clone();
+            let others: Vec<gtk4::ToggleButton> = nav_buttons
+                .iter()
+                .filter(|(other_name, _)| other_name != &name)
+                .map(|(_, b)| b.clone())
+                .collect();
+            button.connect_toggled(glib::clone!(
+                #[weak]
+                stack,
+                move |btn| {
+                    if btn.is_active() {
+                        stack.set_visible_child_name(&name);
+                        for other in &others {
+                            other.set_active(false);
+                        }
+                    } else if !others.iter().any(|o| o.is_active()) {
+                        // Prevent deselecting all — re-activate this one.
+                        btn.set_active(true);
+                    }
+                }
+            ));
+        }
+
+        let sync_buttons = nav_buttons.clone();
+        stack.connect_visible_child_name_notify(move |stack| {
+            let current = stack.visible_child_name();
+            let current = current.as_ref().map(|s| s.as_str());
+            for (name, button) in &sync_buttons {
+                let should_be_active = current == Some(name.as_str());
+                if button.is_active() != should_be_active {
+                    button.set_active(should_be_active);
+                }
+            }
+        });
+
+        stack.set_hexpand(true);
         stack.set_vexpand(true);
+
+        let left_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        left_box.append(&nav_bar);
+        left_box.append(&stack);
 
         // ── Middle pane: editor (top) + terminal (bottom) ──
         let split_container = SplitContainer::new();
@@ -684,6 +745,20 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.toggle-comments (Ctrl+/)
+        let action_toggle_comments = gio::ActionEntry::builder("toggle-comments")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.toggle_line_comment();
+                    }
+                }
+            ))
+            .build();
+
         self.add_action_entries([
             action_open,
             action_save,
@@ -701,6 +776,7 @@ impl RlineWindow {
             action_split,
             action_trigger_completion,
             action_focus_agent,
+            action_toggle_comments,
         ]);
     }
 
@@ -722,6 +798,15 @@ impl RlineWindow {
                     let sc = window.imp().split_container.borrow().clone();
                     if let Some(ref sc) = sc {
                         sc.split_vertical();
+                    }
+                    return gtk4::glib::Propagation::Stop;
+                }
+                if key == gtk4::gdk::Key::slash
+                    && modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK)
+                {
+                    let sc = window.imp().split_container.borrow().clone();
+                    if let Some(ref sc) = sc {
+                        sc.toggle_line_comment();
                     }
                     return gtk4::glib::Propagation::Stop;
                 }

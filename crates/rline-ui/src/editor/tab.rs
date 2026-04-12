@@ -278,6 +278,118 @@ impl EditorTab {
         &self.buffer
     }
 
+    /// Toggle line comments on the current line, or on every line spanned by
+    /// the current selection.
+    ///
+    /// The comment syntax is chosen from the buffer's language (if known) and
+    /// otherwise falls back to the file extension. Languages without a line
+    /// comment syntax (Markdown, JSON, HTML, XML, CSS) are a no-op.
+    pub fn toggle_line_comment(&self) {
+        let Some(prefix) = self.line_comment_prefix() else {
+            tracing::debug!("toggle_line_comment: no line-comment prefix for this buffer");
+            return;
+        };
+        self.apply_comment_toggle(prefix);
+    }
+
+    /// Resolve the line-comment prefix for this buffer.
+    fn line_comment_prefix(&self) -> Option<&'static str> {
+        if let Some(lang) = self.buffer.language() {
+            if let Some(p) = comment_prefix_for_lang_id(lang.id().as_str()) {
+                return Some(p);
+            }
+        }
+        let path_ref = self.path.borrow();
+        if let Some(ref path) = *path_ref {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let lower = ext.to_ascii_lowercase();
+                if let Some(p) = comment_prefix_for_extension(&lower) {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Drive the toggle edit against the buffer.
+    ///
+    /// The entire block of affected lines is replaced in a single
+    /// `delete` + `insert` pair wrapped in `begin_user_action` /
+    /// `end_user_action`, so Ctrl+Z undoes the whole toggle in one step and
+    /// syntax-highlighting signals fire once at the end of the action.
+    fn apply_comment_toggle(&self, prefix: &str) {
+        let had_selection = self.buffer.has_selection();
+
+        let (first_line, last_line) = if let Some((s, e)) = self.buffer.selection_bounds() {
+            let first = s.line();
+            let last_raw = e.line();
+            // Match VS Code: when the selection ends exactly at column 0 on a
+            // later line, that trailing line is not considered "selected".
+            let last = if last_raw > first && e.line_offset() == 0 {
+                last_raw - 1
+            } else {
+                last_raw
+            };
+            (first, last)
+        } else {
+            let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+            (cursor.line(), cursor.line())
+        };
+
+        let Some(start_iter) = self.buffer.iter_at_line(first_line) else {
+            return;
+        };
+        let end_iter = self.line_end_iter(last_line);
+        let old_text = self.buffer.text(&start_iter, &end_iter, true).to_string();
+
+        let Some(new_text) = transform_block(&old_text, prefix) else {
+            return;
+        };
+        if new_text == old_text {
+            return;
+        }
+
+        // Dismiss any visible ghost text and suppress the AI auto-trigger while
+        // we mutate the buffer — this edit came from a shortcut, not a
+        // keystroke, and should not kick off a completion request.
+        self.dismiss_ghost_text();
+        if let Some(ref ic) = *self.inline_completion.borrow() {
+            ic.set_suppressing(true);
+        }
+
+        self.buffer.begin_user_action();
+        let mut del_start = start_iter;
+        let mut del_end = end_iter;
+        self.buffer.delete(&mut del_start, &mut del_end);
+        // `del_start` now points at the deletion site; insert the new block there.
+        self.buffer.insert(&mut del_start, &new_text);
+        self.buffer.end_user_action();
+
+        if let Some(ref ic) = *self.inline_completion.borrow() {
+            ic.set_suppressing(false);
+        }
+
+        if had_selection {
+            if let Some(sel_start) = self.buffer.iter_at_line(first_line) {
+                let sel_end = self.line_end_iter(last_line);
+                self.buffer.select_range(&sel_start, &sel_end);
+            }
+        }
+    }
+
+    /// End-of-line iter for `line` (or the buffer end if `line` is past it).
+    fn line_end_iter(&self, line: i32) -> gtk4::TextIter {
+        match self.buffer.iter_at_line(line) {
+            Some(mut e) => {
+                if !e.ends_line() {
+                    e.forward_to_line_end();
+                }
+                e
+            }
+            None => self.buffer.end_iter(),
+        }
+    }
+
     /// Apply settings to this tab.
     pub fn apply_settings(&self, settings: &EditorSettings) {
         self.view.set_show_line_numbers(settings.show_line_numbers);
@@ -442,5 +554,345 @@ impl EditorTab {
             );
             *slot = Some(provider);
         });
+    }
+}
+
+/// What the Ctrl+/ shortcut should do to a given set of lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToggleAction {
+    /// No non-blank lines in the selection — do nothing.
+    None,
+    /// Add the line-comment prefix at `min_col` on each non-blank line.
+    Comment { min_col: usize },
+    /// Remove the line-comment prefix (and one optional trailing space) from
+    /// each non-blank line.
+    Uncomment,
+}
+
+/// Number of leading whitespace characters on a line (tabs count as one char).
+fn leading_ws_char_count(line: &str) -> usize {
+    line.chars().take_while(|c| c.is_whitespace()).count()
+}
+
+/// A line is blank if it contains only whitespace (or nothing).
+fn is_blank(line: &str) -> bool {
+    line.chars().all(char::is_whitespace)
+}
+
+/// True if `line`, after its leading whitespace, begins with `prefix`.
+fn is_line_commented(line: &str, prefix: &str) -> bool {
+    let ws = leading_ws_char_count(line);
+    line.chars()
+        .skip(ws)
+        .collect::<String>()
+        .starts_with(prefix)
+}
+
+/// Decide whether to add or remove comments across a block of lines.
+///
+/// The rule matches VS Code: if every non-blank line already begins with the
+/// prefix (after indentation), uncomment; otherwise comment everything at the
+/// minimum indentation column so the block stays visually aligned.
+fn decide_toggle_action(lines: &[&str], prefix: &str) -> ToggleAction {
+    let mut any_non_blank = false;
+    let mut all_commented = true;
+    let mut min_col = usize::MAX;
+    for line in lines {
+        if is_blank(line) {
+            continue;
+        }
+        any_non_blank = true;
+        let ws = leading_ws_char_count(line);
+        if ws < min_col {
+            min_col = ws;
+        }
+        if !is_line_commented(line, prefix) {
+            all_commented = false;
+        }
+    }
+    if !any_non_blank {
+        return ToggleAction::None;
+    }
+    if all_commented {
+        ToggleAction::Uncomment
+    } else {
+        ToggleAction::Comment { min_col }
+    }
+}
+
+/// Transform a block of text (lines separated by `\n`) by adding or removing
+/// line comments per [`decide_toggle_action`]. Returns `None` when the block
+/// has no non-blank lines (nothing to do).
+///
+/// Keeping this pure lets the buffer-side code perform a single
+/// delete-then-insert pair, which groups into one undo step.
+fn transform_block(text: &str, prefix: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let action = decide_toggle_action(&lines, prefix);
+    match action {
+        ToggleAction::None => None,
+        ToggleAction::Comment { min_col } => {
+            let insert_text = format!("{prefix} ");
+            let out: Vec<String> = lines
+                .iter()
+                .map(|line| {
+                    if is_blank(line) {
+                        return (*line).to_string();
+                    }
+                    let head: String = line.chars().take(min_col).collect();
+                    let tail: String = line.chars().skip(min_col).collect();
+                    format!("{head}{insert_text}{tail}")
+                })
+                .collect();
+            Some(out.join("\n"))
+        }
+        ToggleAction::Uncomment => {
+            let out: Vec<String> = lines
+                .iter()
+                .map(|line| match find_uncomment_range(line, prefix) {
+                    Some((cs, ce)) => {
+                        let mut result: String = line.chars().take(cs).collect();
+                        let tail: String = line.chars().skip(ce).collect();
+                        result.push_str(&tail);
+                        result
+                    }
+                    None => (*line).to_string(),
+                })
+                .collect();
+            Some(out.join("\n"))
+        }
+    }
+}
+
+/// Character range to delete when uncommenting a single line.
+///
+/// Returns `(start, end)` as character offsets within `line`, covering the
+/// prefix plus one trailing space if present. Returns `None` if the line
+/// isn't commented (caller should skip it).
+fn find_uncomment_range(line: &str, prefix: &str) -> Option<(usize, usize)> {
+    let ws = leading_ws_char_count(line);
+    let rest: String = line.chars().skip(ws).collect();
+    if !rest.starts_with(prefix) {
+        return None;
+    }
+    let prefix_chars = prefix.chars().count();
+    let trail = if rest.chars().nth(prefix_chars) == Some(' ') {
+        1
+    } else {
+        0
+    };
+    Some((ws, ws + prefix_chars + trail))
+}
+
+/// Line-comment prefix for a sourceview5 language ID.
+fn comment_prefix_for_lang_id(id: &str) -> Option<&'static str> {
+    match id {
+        "rust" | "c" | "cpp" | "chdr" | "cpphdr" | "c-sharp" | "java" | "js" | "javascript"
+        | "jsx" | "typescript" | "tsx" | "go" | "scala" | "kotlin" | "swift" | "dart" | "glsl"
+        | "rust-trait" | "opencl" | "verilog" | "systemverilog" => Some("//"),
+        "python" | "python3" | "ruby" | "sh" | "bash" | "shell" | "zsh" | "fish" | "yaml"
+        | "toml" | "makefile" | "perl" | "r" | "elixir" | "nim" | "dockerfile" | "gitignore"
+        | "gitcommit" | "conf" | "ini" | "cmake" => Some("#"),
+        "sql" | "haskell" | "lua" | "ada" => Some("--"),
+        "lisp" | "scheme" | "clojure" | "commonlisp" | "emacs-lisp" => Some(";"),
+        "vim" | "vimrc" => Some("\""),
+        "haml" => Some("-#"),
+        "erlang" | "tex" | "latex" | "matlab" | "octave" => Some("%"),
+        _ => None,
+    }
+}
+
+/// Line-comment prefix for a (lower-cased) file extension.
+fn comment_prefix_for_extension(ext: &str) -> Option<&'static str> {
+    match ext {
+        "rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "cs" | "java" | "js"
+        | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "go" | "scala" | "kt" | "kts" | "swift"
+        | "dart" | "glsl" | "vert" | "frag" | "sv" => Some("//"),
+        "py" | "pyw" | "rb" | "sh" | "bash" | "zsh" | "fish" | "yaml" | "yml" | "toml" | "mk"
+        | "makefile" | "pl" | "pm" | "r" | "ex" | "exs" | "nim" | "conf" | "ini" | "cmake" => {
+            Some("#")
+        }
+        "sql" | "hs" | "lhs" | "lua" | "ada" | "adb" | "ads" => Some("--"),
+        "lisp" | "lsp" | "cl" | "scm" | "ss" | "clj" | "cljs" | "el" => Some(";"),
+        "vim" | "vimrc" => Some("\""),
+        "haml" => Some("-#"),
+        "erl" | "hrl" | "tex" | "latex" | "sty" => Some("%"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::*;
+
+    #[test]
+    fn test_leading_ws_counts_tabs_and_spaces() {
+        assert_eq!(leading_ws_char_count(""), 0);
+        assert_eq!(leading_ws_char_count("no indent"), 0);
+        assert_eq!(leading_ws_char_count("    four spaces"), 4);
+        assert_eq!(leading_ws_char_count("\t\tmixed"), 2);
+        assert_eq!(leading_ws_char_count("  \t mixed"), 4);
+    }
+
+    #[test]
+    fn test_is_blank() {
+        assert!(is_blank(""));
+        assert!(is_blank("   "));
+        assert!(is_blank("\t\t"));
+        assert!(!is_blank(" x "));
+    }
+
+    #[test]
+    fn test_is_line_commented_slash() {
+        assert!(is_line_commented("// hi", "//"));
+        assert!(is_line_commented("    // hi", "//"));
+        assert!(is_line_commented("//", "//"));
+        assert!(!is_line_commented("hi // trailing", "//"));
+        assert!(!is_line_commented("", "//"));
+    }
+
+    #[test]
+    fn test_decide_mixed_commentses() {
+        // All non-blank lines commented → uncomment.
+        let lines = vec!["// a", "    // b", "", "// c"];
+        assert_eq!(
+            decide_toggle_action(&lines, "//"),
+            ToggleAction::Uncomment,
+            "all commented → uncomment"
+        );
+
+        // One non-blank line not commented → comment all, at min indent.
+        let lines = vec!["    x", "  // y"];
+        assert_eq!(
+            decide_toggle_action(&lines, "//"),
+            ToggleAction::Comment { min_col: 2 },
+            "mixed → comment at min indent"
+        );
+
+        // No non-blank lines → no-op.
+        let lines = vec!["", "   ", "\t"];
+        assert_eq!(decide_toggle_action(&lines, "//"), ToggleAction::None);
+    }
+
+    #[test]
+    fn test_decide_single_uncommented_line() {
+        let lines = vec!["  let x = 1;"];
+        assert_eq!(
+            decide_toggle_action(&lines, "//"),
+            ToggleAction::Comment { min_col: 2 }
+        );
+    }
+
+    #[test]
+    fn test_decide_respects_blank_lines_for_min_col() {
+        let lines = vec!["", "    x", "  y", ""];
+        assert_eq!(
+            decide_toggle_action(&lines, "//"),
+            ToggleAction::Comment { min_col: 2 },
+            "blank lines must not lower min_col to 0"
+        );
+    }
+
+    #[test]
+    fn test_find_uncomment_range_with_space() {
+        let line = "    // hello";
+        let (s, e) = find_uncomment_range(line, "//").expect("commented");
+        assert_eq!((s, e), (4, 7), "removes // and one trailing space");
+    }
+
+    #[test]
+    fn test_find_uncomment_range_without_space() {
+        let line = "    //hello";
+        let (s, e) = find_uncomment_range(line, "//").expect("commented");
+        assert_eq!((s, e), (4, 6), "removes only //, no trailing space to eat");
+    }
+
+    #[test]
+    fn test_find_uncomment_range_multi_char_prefix() {
+        let line = "  -- SELECT 1";
+        let (s, e) = find_uncomment_range(line, "--").expect("commented");
+        assert_eq!((s, e), (2, 5));
+    }
+
+    #[test]
+    fn test_find_uncomment_range_not_commented() {
+        assert_eq!(find_uncomment_range("hello // world", "//"), None);
+        assert_eq!(find_uncomment_range("", "//"), None);
+    }
+
+    #[test]
+    fn test_find_uncomment_range_only_prefix() {
+        let line = "//";
+        let (s, e) = find_uncomment_range(line, "//").expect("commented");
+        assert_eq!((s, e), (0, 2));
+    }
+
+    #[test]
+    fn test_prefix_lookup_by_lang_id() {
+        assert_eq!(comment_prefix_for_lang_id("rust"), Some("//"));
+        assert_eq!(comment_prefix_for_lang_id("python"), Some("#"));
+        assert_eq!(comment_prefix_for_lang_id("sql"), Some("--"));
+        assert_eq!(comment_prefix_for_lang_id("haml"), Some("-#"));
+        assert_eq!(comment_prefix_for_lang_id("markdown"), None);
+        assert_eq!(comment_prefix_for_lang_id("html"), None);
+        assert_eq!(comment_prefix_for_lang_id(""), None);
+    }
+
+    #[test]
+    fn test_prefix_lookup_by_extension() {
+        assert_eq!(comment_prefix_for_extension("rs"), Some("//"));
+        assert_eq!(comment_prefix_for_extension("py"), Some("#"));
+        assert_eq!(comment_prefix_for_extension("sql"), Some("--"));
+        assert_eq!(comment_prefix_for_extension("haml"), Some("-#"));
+        assert_eq!(comment_prefix_for_extension("md"), None);
+    }
+
+    #[test]
+    fn test_transform_block_comments_mixed_indents() {
+        // '// ' is inserted at the minimum-indent column (2 spaces here) on
+        // every non-blank line, so deeper-indented lines keep their extra
+        // whitespace *after* the marker. This preserves relative indentation
+        // and makes the toggle a clean round-trip.
+        let input = "    let x = 1;\n  if y {\n\n        println!();\n  }";
+        let out = transform_block(input, "//").expect("non-empty");
+        assert_eq!(
+            out, "  //   let x = 1;\n  // if y {\n\n  //       println!();\n  // }",
+            "marker inserted at min indent; original leading whitespace preserved after it"
+        );
+    }
+
+    #[test]
+    fn test_transform_block_uncomments_all_commented() {
+        let input = "    // a\n  // b\n\n// c";
+        let out = transform_block(input, "//").expect("non-empty");
+        assert_eq!(
+            out, "    a\n  b\n\nc",
+            "prefix and single trailing space stripped per line; blanks preserved"
+        );
+    }
+
+    #[test]
+    fn test_transform_block_toggle_roundtrip() {
+        let original = "fn main() {\n    println!();\n}";
+        let commented = transform_block(original, "//").expect("non-empty");
+        let back = transform_block(&commented, "//").expect("non-empty");
+        assert_eq!(
+            back, original,
+            "comment then uncomment should restore the original text"
+        );
+    }
+
+    #[test]
+    fn test_transform_block_blank_only_is_noop() {
+        assert_eq!(transform_block("", "//"), None);
+        assert_eq!(transform_block("   \n\t\n", "//"), None);
+    }
+
+    #[test]
+    fn test_transform_block_single_line_hash() {
+        let out = transform_block("print('hi')", "#").expect("non-empty");
+        assert_eq!(out, "# print('hi')");
+        let back = transform_block(&out, "#").expect("non-empty");
+        assert_eq!(back, "print('hi')");
     }
 }
