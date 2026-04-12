@@ -37,8 +37,8 @@ pub fn should_auto_approve(
                 return false;
             }
             // Never auto-approve commands that affect the system outside the
-            // project, unless YOLO mode is enabled.
-            if !settings.agent_yolo_mode && is_system_affecting_command(arguments) {
+            // project directory (apt, sudo, global installs, etc.).
+            if is_system_affecting_command(arguments) {
                 return false;
             }
             // Only auto-approve commands classified as safe.
@@ -51,6 +51,8 @@ pub fn should_auto_approve(
         ToolCategory::McpTrusted => true,
         // Untrusted MCP servers always require explicit user approval.
         ToolCategory::McpUntrusted => false,
+        // Browser actions don't touch the filesystem outside the workspace.
+        ToolCategory::Browser => settings.agent_auto_approve_browser,
     }
 }
 
@@ -87,7 +89,7 @@ fn is_path_in_workspace(arguments: &str, workspace_root: &Path) -> bool {
 ///
 /// Detects package managers that install system-wide, privilege escalation,
 /// service management, and other commands with global side effects. These
-/// require explicit user approval unless YOLO mode is enabled.
+/// always require explicit user approval.
 pub fn is_system_affecting_command(arguments: &str) -> bool {
     let cmd = match serde_json::from_str::<serde_json::Value>(arguments) {
         Ok(v) => v.get("command").and_then(|c| c.as_str()).map(String::from),
@@ -389,11 +391,12 @@ mod tests {
     use super::*;
 
     fn test_settings(read: bool, edit: bool, cmd: bool) -> EditorSettings {
-        let mut s = EditorSettings::default();
-        s.agent_auto_approve_read = read;
-        s.agent_auto_approve_edit = edit;
-        s.agent_auto_approve_command = cmd;
-        s
+        EditorSettings {
+            agent_auto_approve_read: read,
+            agent_auto_approve_edit: edit,
+            agent_auto_approve_command: cmd,
+            ..EditorSettings::default()
+        }
     }
 
     #[test]
@@ -627,8 +630,7 @@ mod tests {
     #[test]
     fn test_system_affecting_not_auto_approved() {
         let dir = tempfile::tempdir().expect("temp dir in test");
-        let mut settings = test_settings(true, true, true);
-        settings.agent_yolo_mode = false;
+        let settings = test_settings(true, true, true);
         let args = r#"{"command": "apt install foo"}"#;
 
         assert!(
@@ -639,26 +641,7 @@ mod tests {
                 dir.path(),
                 &settings
             ),
-            "system-affecting command should not be auto-approved without YOLO"
-        );
-    }
-
-    #[test]
-    fn test_system_affecting_auto_approved_in_yolo() {
-        let dir = tempfile::tempdir().expect("temp dir in test");
-        let mut settings = test_settings(true, true, true);
-        settings.agent_yolo_mode = true;
-        let args = r#"{"command": "ls -la"}"#;
-
-        assert!(
-            should_auto_approve(
-                "execute_command",
-                ToolCategory::ExecuteCommand,
-                args,
-                dir.path(),
-                &settings
-            ),
-            "safe command should be auto-approved in YOLO mode"
+            "system-affecting command should not be auto-approved"
         );
     }
 }

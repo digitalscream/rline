@@ -6,6 +6,7 @@
 
 pub mod ask_followup_question;
 pub mod attempt_completion;
+pub mod browser_action;
 pub mod definitions;
 pub mod execute_command;
 pub mod list_code_definition_names;
@@ -27,8 +28,13 @@ use crate::error::AiError;
 pub struct ToolResult {
     /// Whether the tool executed successfully.
     pub success: bool,
-    /// The output to send back to the AI model.
+    /// The text output to send back to the AI model.
     pub output: String,
+    /// Optional PNG screenshot bytes. When present and the agent is configured
+    /// for multimodal models, the image is attached to the tool result message.
+    /// Otherwise the tool is expected to reference the image through `output`
+    /// (e.g. by saving it to disk and including the path).
+    pub image_png: Option<Vec<u8>>,
 }
 
 impl ToolResult {
@@ -37,6 +43,7 @@ impl ToolResult {
         Self {
             success: true,
             output: output.into(),
+            image_png: None,
         }
     }
 
@@ -45,6 +52,16 @@ impl ToolResult {
         Self {
             success: false,
             output: output.into(),
+            image_png: None,
+        }
+    }
+
+    /// Create a successful tool result carrying a PNG screenshot.
+    pub fn ok_with_image(output: impl Into<String>, png: Vec<u8>) -> Self {
+        Self {
+            success: true,
+            output: output.into(),
+            image_png: Some(png),
         }
     }
 }
@@ -64,6 +81,8 @@ pub enum ToolCategory {
     McpTrusted,
     /// Tools from an untrusted MCP server (always requires user approval).
     McpUntrusted,
+    /// Tools that automate a web browser.
+    Browser,
 }
 
 /// A tool that the AI agent can invoke.
@@ -95,30 +114,33 @@ pub struct ToolRegistry {
     tools: Arc<Vec<Box<dyn Tool>>>,
 }
 
+/// Configuration for the browser_action tool.
+#[derive(Debug, Clone)]
+pub struct BrowserConfig {
+    /// Tokio runtime handle the browser tool will use for async CDP calls.
+    pub runtime: tokio::runtime::Handle,
+    /// Viewport (width, height) in pixels.
+    pub viewport: (u32, u32),
+    /// Whether the agent model accepts multimodal (image) input.
+    pub multimodal: bool,
+}
+
 impl ToolRegistry {
-    /// Create a registry with all built-in tools.
+    /// Create a registry with all built-in tools, using defaults for the
+    /// browser tool. Prefer [`ToolRegistry::builder`] when the caller can
+    /// supply a configured tokio runtime handle.
     pub fn new() -> Self {
-        Self::with_extra_tools(Vec::new())
+        Self::builder().build()
+    }
+
+    /// Start building a customised registry.
+    pub fn builder() -> ToolRegistryBuilder {
+        ToolRegistryBuilder::default()
     }
 
     /// Create a registry with built-in tools plus additional tools (e.g. MCP tools).
     pub fn with_extra_tools(extra: Vec<Box<dyn Tool>>) -> Self {
-        let mut tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(read_file::ReadFileTool),
-            Box::new(write_to_file::WriteToFileTool),
-            Box::new(replace_in_file::ReplaceInFileTool),
-            Box::new(list_files::ListFilesTool),
-            Box::new(search_files::SearchFilesTool),
-            Box::new(execute_command::ExecuteCommandTool::default()),
-            Box::new(list_code_definition_names::ListCodeDefinitionNamesTool),
-            Box::new(ask_followup_question::AskFollowupQuestionTool),
-            Box::new(attempt_completion::AttemptCompletionTool),
-            Box::new(plan_mode_respond::PlanModeRespondTool),
-        ];
-        tools.extend(extra);
-        Self {
-            tools: Arc::new(tools),
-        }
+        Self::builder().extra_tools(extra).build()
     }
 
     /// Get tool definitions filtered by mode.
@@ -169,6 +191,65 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Builder for [`ToolRegistry`].
+#[derive(Default)]
+pub struct ToolRegistryBuilder {
+    extra: Vec<Box<dyn Tool>>,
+    browser: Option<BrowserConfig>,
+    command_timeout_secs: Option<u64>,
+}
+
+impl ToolRegistryBuilder {
+    /// Append tools from an MCP server or other external source.
+    pub fn extra_tools(mut self, extra: Vec<Box<dyn Tool>>) -> Self {
+        self.extra.extend(extra);
+        self
+    }
+
+    /// Configure the browser_action tool. Omit to skip registering it.
+    pub fn browser(mut self, config: BrowserConfig) -> Self {
+        self.browser = Some(config);
+        self
+    }
+
+    /// Override the shell command execution timeout.
+    pub fn command_timeout_secs(mut self, secs: u64) -> Self {
+        self.command_timeout_secs = Some(secs);
+        self
+    }
+
+    /// Finalise and build the registry.
+    pub fn build(self) -> ToolRegistry {
+        let exec = match self.command_timeout_secs {
+            Some(secs) => execute_command::ExecuteCommandTool::with_timeout(secs),
+            None => execute_command::ExecuteCommandTool::default(),
+        };
+        let mut tools: Vec<Box<dyn Tool>> = vec![
+            Box::new(read_file::ReadFileTool),
+            Box::new(write_to_file::WriteToFileTool),
+            Box::new(replace_in_file::ReplaceInFileTool),
+            Box::new(list_files::ListFilesTool),
+            Box::new(search_files::SearchFilesTool),
+            Box::new(exec),
+            Box::new(list_code_definition_names::ListCodeDefinitionNamesTool),
+            Box::new(ask_followup_question::AskFollowupQuestionTool),
+            Box::new(attempt_completion::AttemptCompletionTool),
+            Box::new(plan_mode_respond::PlanModeRespondTool),
+        ];
+        if let Some(cfg) = self.browser {
+            tools.push(Box::new(browser_action::BrowserActionTool::new(
+                cfg.runtime,
+                cfg.viewport,
+                cfg.multimodal,
+            )));
+        }
+        tools.extend(self.extra);
+        ToolRegistry {
+            tools: Arc::new(tools),
+        }
     }
 }
 

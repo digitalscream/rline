@@ -22,6 +22,17 @@ use rline_ai::chat::client::ChatClient;
 use super::message_widget;
 use super::permission;
 
+/// State for consolidating consecutive identical tool calls under one card.
+#[derive(Clone)]
+struct LastToolBlock {
+    name: String,
+    arguments: String,
+    count_label: gtk4::Label,
+    result_box: gtk4::Box,
+    button_box: gtk4::Box,
+    count: Rc<RefCell<usize>>,
+}
+
 /// The AI agent panel displayed in the right pane.
 #[derive(Clone)]
 pub struct AgentPanel {
@@ -42,6 +53,10 @@ pub struct AgentPanel {
     /// Map of tool call ID to (result_box, button_box) for pending tool calls.
     #[allow(clippy::type_complexity)]
     pending_tool_widgets: Rc<RefCell<Vec<(String, gtk4::Box, gtk4::Box)>>>,
+    /// The most recently appended tool call block, used to consolidate
+    /// consecutive duplicate tool calls under a single header with a `×N`
+    /// repeat badge. Cleared on "New Task".
+    last_tool_block: Rc<RefCell<Option<LastToolBlock>>>,
     /// Shared conversation context persisted across sends and mode switches.
     conversation_context: Arc<Mutex<Option<ConversationContext>>>,
     /// Path to the history file for the current conversation (one file per task).
@@ -98,7 +113,7 @@ impl AgentPanel {
         header_box.set_margin_end(4);
         header_box.set_margin_bottom(4);
 
-        let mode_model = gtk4::StringList::new(&["Act", "Plan"]);
+        let mode_model = gtk4::StringList::new(&["Act", "Plan", "YOLO"]);
         let mode_dropdown = gtk4::DropDown::new(Some(mode_model), gtk4::Expression::NONE);
         mode_dropdown.set_selected(1); // Plan by default.
         mode_dropdown.set_tooltip_text(Some("Agent mode"));
@@ -193,6 +208,7 @@ impl AgentPanel {
             is_running: Rc::new(RefCell::new(false)),
             current_ai_label: Rc::new(RefCell::new(None)),
             pending_tool_widgets: Rc::new(RefCell::new(Vec::new())),
+            last_tool_block: Rc::new(RefCell::new(None)),
             conversation_context: Arc::new(Mutex::new(None)),
             history_file: Arc::new(Mutex::new(None)),
             on_open_diff: Rc::new(RefCell::new(None)),
@@ -336,6 +352,7 @@ impl AgentPanel {
         *self.is_running.borrow_mut() = false;
         *self.current_ai_label.borrow_mut() = None;
         self.pending_tool_widgets.borrow_mut().clear();
+        *self.last_tool_block.borrow_mut() = None;
         remove_working_indicator(&self.working_indicator, &self.working_timer);
         *self
             .conversation_context
@@ -384,9 +401,12 @@ impl AgentPanel {
             &settings.agent_model,
         );
 
-        let mode = if self.mode_dropdown.selected() == 1 {
+        let selected_mode = self.mode_dropdown.selected();
+        let is_yolo = selected_mode == 2;
+        let mode = if selected_mode == 1 {
             AgentMode::Plan
         } else {
+            // Both Act (0) and YOLO (2) use Act mode; YOLO just auto-approves everything.
             AgentMode::Act
         };
 
@@ -415,17 +435,29 @@ impl AgentPanel {
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>();
 
         // Build the auto-approve function.
+        // In YOLO mode, everything is auto-approved without checking settings.
         let ws_root = workspace_root.clone();
-        let auto_approve: rline_ai::agent::r#loop::AutoApproveFn =
+        let auto_approve: rline_ai::agent::r#loop::AutoApproveFn = if is_yolo {
+            Box::new(|_tool_name, _category, _arguments| true)
+        } else {
             Box::new(move |tool_name, category, arguments| {
                 let s = rline_config::EditorSettings::load().unwrap_or_default();
                 permission::should_auto_approve(tool_name, category, arguments, &ws_root, &s)
-            });
+            })
+        };
 
         let max_tokens = Some(settings.agent_max_tokens);
         let temperature = Some(settings.agent_temperature);
         let max_context = settings.agent_context_length as usize;
         let max_turns = settings.agent_max_turns as usize;
+        let browser_config = rline_ai::tools::BrowserConfig {
+            runtime: rline_ai::ai_runtime().handle().clone(),
+            viewport: (
+                settings.agent_browser_viewport_width,
+                settings.agent_browser_viewport_height,
+            ),
+            multimodal: settings.agent_multimodal,
+        };
         // Spawn the agent loop on the AI runtime, reusing context if available.
         let ws_root2 = workspace_root.clone();
         let ws_root3 = workspace_root.clone();
@@ -472,6 +504,7 @@ impl AgentPanel {
                     max_turns,
                     mcp_tools,
                     mcp_mgr_arc,
+                    Some(browser_config.clone()),
                 ),
                 None => {
                     // Load custom system prompt from config dir if it exists.
@@ -500,6 +533,7 @@ impl AgentPanel {
                         mcp_tools,
                         mcp_mgr_arc,
                         mcp_tool_summary,
+                        Some(browser_config),
                     )
                 }
             };
@@ -527,6 +561,7 @@ impl AgentPanel {
         let ctx_label = self.context_label.clone();
         let working_indicator = self.working_indicator.clone();
         let working_timer = self.working_timer.clone();
+        let last_tool_block = self.last_tool_block.clone();
 
         glib::idle_add_local(move || {
             match event_rx.try_recv() {
@@ -544,6 +579,7 @@ impl AgentPanel {
                         &ctx_label,
                         &working_indicator,
                         &working_timer,
+                        &last_tool_block,
                     );
                     glib::ControlFlow::Continue
                 }
@@ -599,6 +635,7 @@ fn handle_event(
     context_label: &gtk4::Label,
     working_indicator: &Rc<RefCell<Option<gtk4::Box>>>,
     working_timer: &Rc<RefCell<Option<glib::SourceId>>>,
+    last_tool_block: &Rc<RefCell<Option<LastToolBlock>>>,
 ) {
     match event {
         AgentEvent::TextDelta(delta) => {
@@ -650,12 +687,49 @@ fn handle_event(
                 messages_box,
             );
 
-            let widget = message_widget::build_tool_call(&name, &arguments);
-            messages_box.append(&widget.container);
+            // If this tool call is identical to the most recently created
+            // card, reuse that card instead of spawning a new one — bump the
+            // repeat badge and map the new id onto the existing boxes. This
+            // collapses runaway loops (e.g. repeated scroll_down) into a
+            // single visual block.
+            let matched = {
+                let existing = last_tool_block.borrow();
+                existing
+                    .as_ref()
+                    .filter(|b| b.name == name && b.arguments == arguments)
+                    .cloned()
+            };
 
-            pending
-                .borrow_mut()
-                .push((id, widget.result_box.clone(), widget.button_box.clone()));
+            if let Some(block) = matched {
+                let next = {
+                    let mut n = block.count.borrow_mut();
+                    *n += 1;
+                    *n
+                };
+                message_widget::set_tool_call_repeat_count(&block.count_label, next);
+                pending
+                    .borrow_mut()
+                    .push((id, block.result_box.clone(), block.button_box.clone()));
+            } else {
+                let widget = message_widget::build_tool_call(&name, &arguments);
+                messages_box.append(&widget.container);
+                pending.borrow_mut().push((
+                    id.clone(),
+                    widget.result_box.clone(),
+                    widget.button_box.clone(),
+                ));
+                *last_tool_block.borrow_mut() = Some(LastToolBlock {
+                    name,
+                    arguments,
+                    count_label: widget.count_label,
+                    result_box: widget.result_box,
+                    button_box: widget.button_box,
+                    count: Rc::new(RefCell::new(1)),
+                });
+                // id is consumed in the push above; discard the variable so
+                // the borrow-checker is happy with the separate branches.
+                let _ = id;
+            }
 
             scroll_to_bottom(scrolled);
         }
@@ -717,12 +791,13 @@ fn handle_event(
             id,
             success,
             output,
+            image_png,
             ..
         } => {
             let pending_ref = pending.borrow();
             let entry = pending_ref.iter().find(|(tid, _, _)| *tid == id);
             if let Some((_, result_box, _)) = entry {
-                message_widget::add_tool_result(result_box, success, &output);
+                message_widget::add_tool_result(result_box, success, &output, image_png.as_deref());
             }
             scroll_to_bottom(scrolled);
         }

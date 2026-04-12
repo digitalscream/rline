@@ -11,6 +11,7 @@
 //! Async operations run on a dedicated tokio runtime to avoid blocking GTK.
 
 pub mod agent;
+pub mod browser;
 pub mod chat;
 pub mod client;
 pub mod error;

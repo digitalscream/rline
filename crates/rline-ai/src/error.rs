@@ -77,4 +77,8 @@ pub enum AiError {
     /// MCP server configuration is invalid.
     #[error("MCP config error: {0}")]
     McpConfig(String),
+
+    /// A browser automation error.
+    #[error("browser error: {0}")]
+    Browser(String),
 }
