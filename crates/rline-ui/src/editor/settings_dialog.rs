@@ -144,7 +144,10 @@ impl SettingsDialog {
                     agent_auto_approve_read: ap.auto_approve_read_switch.is_active(),
                     agent_auto_approve_edit: ap.auto_approve_edit_switch.is_active(),
                     agent_auto_approve_command: ap.auto_approve_command_switch.is_active(),
-                    agent_yolo_mode: ap.yolo_mode_switch.is_active(),
+                    agent_auto_approve_browser: ap.auto_approve_browser_switch.is_active(),
+                    agent_multimodal: ap.multimodal_switch.is_active(),
+                    agent_browser_viewport_width: ap.browser_width_spin.value() as u32,
+                    agent_browser_viewport_height: ap.browser_height_spin.value() as u32,
                     agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
                     agent_context_length: ap.context_length_spin.value() as u32,
                     agent_max_turns: ap.max_turns_spin.value() as u32,
@@ -623,16 +626,37 @@ impl SettingsDialog {
         auto_approve_command_switch.set_valign(gtk4::Align::Center);
         approve_command_row.append(&auto_approve_command_switch);
 
-        // YOLO mode
-        let yolo_row = Self::make_row("YOLO mode (skip system command approval)");
-        let yolo_mode_switch = gtk4::Switch::new();
-        yolo_mode_switch.set_active(settings.agent_yolo_mode);
-        yolo_mode_switch.set_valign(gtk4::Align::Center);
-        yolo_mode_switch.set_tooltip_text(Some(
-            "When enabled, commands that affect the system outside the project \
-             (apt, sudo, global installs, etc.) will not require approval.",
-        ));
-        yolo_row.append(&yolo_mode_switch);
+        // Auto-approve browser
+        let approve_browser_row = Self::make_row("Browser actions");
+        let auto_approve_browser_switch = gtk4::Switch::new();
+        auto_approve_browser_switch.set_active(settings.agent_auto_approve_browser);
+        auto_approve_browser_switch.set_valign(gtk4::Align::Center);
+        approve_browser_row.append(&auto_approve_browser_switch);
+
+        // ── Browser section ──
+        let browser_header = gtk4::Label::new(None);
+        browser_header.set_markup("<b>Browser Tool</b>");
+        browser_header.set_halign(gtk4::Align::Start);
+        browser_header.set_margin_top(8);
+
+        // Multimodal toggle
+        let multimodal_row = Self::make_row("Model supports vision (multimodal)");
+        let multimodal_switch = gtk4::Switch::new();
+        multimodal_switch.set_active(settings.agent_multimodal);
+        multimodal_switch.set_valign(gtk4::Align::Center);
+        multimodal_row.append(&multimodal_switch);
+
+        // Viewport width
+        let width_row = Self::make_row("Browser viewport width (px)");
+        let browser_width_spin = gtk4::SpinButton::with_range(320.0, 3840.0, 10.0);
+        browser_width_spin.set_value(settings.agent_browser_viewport_width as f64);
+        width_row.append(&browser_width_spin);
+
+        // Viewport height
+        let height_row = Self::make_row("Browser viewport height (px)");
+        let browser_height_spin = gtk4::SpinButton::with_range(240.0, 2160.0, 10.0);
+        browser_height_spin.set_value(settings.agent_browser_viewport_height as f64);
+        height_row.append(&browser_height_spin);
 
         content.append(&endpoint_row);
         content.append(&api_key_row);
@@ -647,7 +671,11 @@ impl SettingsDialog {
         content.append(&approve_read_row);
         content.append(&approve_edit_row);
         content.append(&approve_command_row);
-        content.append(&yolo_row);
+        content.append(&approve_browser_row);
+        content.append(&browser_header);
+        content.append(&multimodal_row);
+        content.append(&width_row);
+        content.append(&height_row);
 
         let scrolled = gtk4::ScrolledWindow::builder()
             .child(&content)
@@ -668,7 +696,10 @@ impl SettingsDialog {
             auto_approve_read_switch,
             auto_approve_edit_switch,
             auto_approve_command_switch,
-            yolo_mode_switch,
+            auto_approve_browser_switch,
+            multimodal_switch,
+            browser_width_spin,
+            browser_height_spin,
         }
     }
 
@@ -1148,5 +1179,8 @@ struct AgentPageWidgets {
     auto_approve_read_switch: gtk4::Switch,
     auto_approve_edit_switch: gtk4::Switch,
     auto_approve_command_switch: gtk4::Switch,
-    yolo_mode_switch: gtk4::Switch,
+    auto_approve_browser_switch: gtk4::Switch,
+    multimodal_switch: gtk4::Switch,
+    browser_width_spin: gtk4::SpinButton,
+    browser_height_spin: gtk4::SpinButton,
 }

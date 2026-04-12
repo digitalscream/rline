@@ -22,7 +22,7 @@ use crate::agent::event::AgentEvent;
 use crate::chat::client::{ChatClient, StreamEvent};
 use crate::chat::types::ToolCall;
 use crate::mcp::manager::McpManager;
-use crate::tools::{Tool, ToolCategory, ToolRegistry, ToolResult};
+use crate::tools::{BrowserConfig, Tool, ToolCategory, ToolRegistry, ToolResult};
 
 /// The agent's operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,8 @@ pub struct AgentLoop {
     temperature: Option<f64>,
     /// Maximum number of tool-use turns before forcing a stop.
     max_turns: usize,
+    /// Whether the configured model accepts multimodal (image) tool results.
+    multimodal: bool,
     /// MCP server manager — held to keep server processes alive for the
     /// duration of the agent loop. Cleanup happens via `McpClient::Drop`.
     _mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
@@ -80,6 +82,7 @@ impl AgentLoop {
         mcp_tools: Vec<Box<dyn Tool>>,
         mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
         mcp_tool_summary: Option<String>,
+        browser_config: Option<BrowserConfig>,
     ) -> Self {
         let mode_str = match mode {
             AgentMode::Plan => "PLAN",
@@ -92,10 +95,21 @@ impl AgentLoop {
             mcp_tool_summary.as_deref(),
         );
 
+        let multimodal = browser_config
+            .as_ref()
+            .map(|c| c.multimodal)
+            .unwrap_or(false);
+
+        let mut registry_builder = ToolRegistry::builder().extra_tools(mcp_tools);
+        if let Some(cfg) = browser_config {
+            registry_builder = registry_builder.browser(cfg);
+        }
+        let registry = registry_builder.build();
+
         Self {
             client,
             context: ConversationContext::new(system_prompt, max_context_tokens),
-            registry: ToolRegistry::with_extra_tools(mcp_tools),
+            registry,
             mode,
             event_tx,
             auto_approve,
@@ -104,6 +118,7 @@ impl AgentLoop {
             max_tokens,
             temperature,
             max_turns,
+            multimodal,
             _mcp_manager: mcp_manager,
         }
     }
@@ -123,11 +138,23 @@ impl AgentLoop {
         max_turns: usize,
         mcp_tools: Vec<Box<dyn Tool>>,
         mcp_manager: Option<Arc<tokio::sync::Mutex<McpManager>>>,
+        browser_config: Option<BrowserConfig>,
     ) -> Self {
+        let multimodal = browser_config
+            .as_ref()
+            .map(|c| c.multimodal)
+            .unwrap_or(false);
+
+        let mut registry_builder = ToolRegistry::builder().extra_tools(mcp_tools);
+        if let Some(cfg) = browser_config {
+            registry_builder = registry_builder.browser(cfg);
+        }
+        let registry = registry_builder.build();
+
         Self {
             client,
             context,
-            registry: ToolRegistry::with_extra_tools(mcp_tools),
+            registry,
             mode,
             event_tx,
             auto_approve,
@@ -136,6 +163,7 @@ impl AgentLoop {
             max_tokens,
             temperature,
             max_turns,
+            multimodal,
             _mcp_manager: mcp_manager,
         }
     }
@@ -288,6 +316,7 @@ impl AgentLoop {
                         name: tool_name.clone(),
                         success: tool_result.success,
                         output: tool_result.output.clone(),
+                        image_png: None,
                     });
 
                     let _ = self.event_tx.send(AgentEvent::Finished {
@@ -343,6 +372,7 @@ impl AgentLoop {
                             name: tool_name.clone(),
                             success: false,
                             output: denied_msg,
+                            image_png: None,
                         });
                     }
                     continue;
@@ -428,7 +458,16 @@ impl AgentLoop {
                     }
                 }
 
-                self.context.add_tool_result(&tc.id, &result_output);
+                let image_for_event = tool_result.image_png.clone();
+                if let (true, Some(png)) = (self.multimodal, tool_result.image_png) {
+                    use base64::engine::general_purpose::STANDARD;
+                    use base64::Engine;
+                    let b64 = STANDARD.encode(&png);
+                    self.context
+                        .add_tool_result_with_image(&tc.id, &result_output, b64);
+                } else {
+                    self.context.add_tool_result(&tc.id, &result_output);
+                }
 
                 // Emit FileChanged for file-editing tools so the UI can show a diff.
                 if tool_result.success
@@ -444,6 +483,7 @@ impl AgentLoop {
                     name: tool_name.clone(),
                     success: tool_result.success,
                     output: tool_result.output,
+                    image_png: image_for_event,
                 });
             }
 
@@ -486,6 +526,7 @@ impl AgentLoop {
                     name: "ask_followup_question".to_owned(),
                     success: false,
                     output: err_msg,
+                    image_png: None,
                 });
                 return Some(());
             }
@@ -505,6 +546,7 @@ impl AgentLoop {
                     name: "ask_followup_question".to_owned(),
                     success: true,
                     output: answer,
+                    image_png: None,
                 });
                 Some(())
             }
@@ -541,6 +583,7 @@ impl AgentLoop {
                     name: "execute_command".to_owned(),
                     success: false,
                     output: err_msg,
+                    image_png: None,
                 });
                 return Some(());
             }
@@ -597,6 +640,7 @@ impl AgentLoop {
             name: "execute_command".to_owned(),
             success,
             output,
+            image_png: None,
         });
 
         Some(())

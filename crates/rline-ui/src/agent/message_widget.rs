@@ -66,6 +66,9 @@ pub struct ToolCallWidget {
     /// The detail revealer (retained for programmatic expand/collapse).
     #[allow(dead_code)]
     pub revealer: gtk4::Revealer,
+    /// Label in the header that displays a `×N` repeat count when the same
+    /// tool call is issued several times in a row. Hidden by default.
+    pub count_label: gtk4::Label,
 }
 
 /// Build a tool call widget.
@@ -96,6 +99,12 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     name_label.set_hexpand(true);
     name_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
     header_box.append(&name_label);
+
+    let count_label = gtk4::Label::new(None);
+    count_label.set_halign(gtk4::Align::End);
+    count_label.set_visible(false);
+    count_label.add_css_class("dim-label");
+    header_box.append(&count_label);
 
     header_btn.set_child(Some(&header_box));
     container.append(&header_btn);
@@ -157,11 +166,30 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
         result_box,
         button_box,
         revealer,
+        count_label,
+    }
+}
+
+/// Update a tool call widget's header badge to show the repeat count.
+pub fn set_tool_call_repeat_count(count_label: &gtk4::Label, count: usize) {
+    if count <= 1 {
+        count_label.set_visible(false);
+        count_label.set_label("");
+    } else {
+        count_label.set_markup(&format!("<small>×{count}</small>"));
+        count_label.set_visible(true);
     }
 }
 
 /// Add a tool result display to an existing tool call widget.
-pub fn add_tool_result(result_box: &gtk4::Box, success: bool, output: &str) {
+/// Populate the result area of a tool card with the tool's textual output
+/// and, optionally, an inline screenshot.
+pub fn add_tool_result(
+    result_box: &gtk4::Box,
+    success: bool,
+    output: &str,
+    image_png: Option<&[u8]>,
+) {
     // Clear any previous content.
     while let Some(child) = result_box.first_child() {
         result_box.remove(&child);
@@ -193,6 +221,26 @@ pub fn add_tool_result(result_box: &gtk4::Box, success: bool, output: &str) {
     output_label.set_xalign(0.0);
     output_label.add_css_class("monospace");
     result_box.append(&output_label);
+
+    if let Some(png) = image_png {
+        if let Some(picture) = build_screenshot_picture(png) {
+            result_box.append(&picture);
+        }
+    }
+}
+
+/// Decode a PNG byte buffer into a `gtk4::Picture`, scaled to fit the card.
+fn build_screenshot_picture(png: &[u8]) -> Option<gtk4::Picture> {
+    use gtk4::gdk;
+    let bytes = glib::Bytes::from(png);
+    let texture = gdk::Texture::from_bytes(&bytes).ok()?;
+    let picture = gtk4::Picture::for_paintable(&texture);
+    picture.set_can_shrink(true);
+    picture.set_content_fit(gtk4::ContentFit::Contain);
+    picture.set_margin_top(4);
+    picture.set_margin_bottom(4);
+    picture.set_size_request(-1, 240);
+    Some(picture)
 }
 
 /// Build a task completion widget.
@@ -356,6 +404,27 @@ fn extract_tool_detail(name: &str, arguments: &str) -> Option<String> {
             }
         }),
         "attempt_completion" => Some("task complete".to_owned()),
+        "browser_action" => {
+            let action = v.get("action").and_then(|a| a.as_str())?;
+            match action {
+                "launch" => v
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .map(|u| format!("launch: {u}")),
+                "click" => v
+                    .get("coordinate")
+                    .and_then(|c| c.as_str())
+                    .map(|c| format!("click @ {c}")),
+                "type" => v.get("text").and_then(|t| t.as_str()).map(|t| {
+                    if t.len() > 40 {
+                        format!("type: {}...", &t[..37])
+                    } else {
+                        format!("type: {t}")
+                    }
+                }),
+                other => Some(other.to_owned()),
+            }
+        }
         _ => None,
     }
 }
