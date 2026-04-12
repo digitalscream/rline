@@ -310,6 +310,7 @@ pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gt
     input_box.set_margin_bottom(4);
 
     let text_view = gtk4::TextView::new();
+    text_view.add_css_class("agent-input");
     text_view.set_wrap_mode(gtk4::WrapMode::Word);
     text_view.set_left_margin(4);
     text_view.set_right_margin(4);

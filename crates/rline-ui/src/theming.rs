@@ -263,7 +263,7 @@ pub fn apply_app_theme(scheme_id: &str) {
                 /* ── Tab bars in notebooks ── */
                 notebook > header {{
                     background: {tab_bg};
-                    border-bottom: 1px solid {separator};
+                    border-bottom: none;
                 }}
                 notebook > header tab {{
                     background: {tab_bg};
@@ -278,22 +278,41 @@ pub fn apply_app_theme(scheme_id: &str) {
                     border-bottom: 2px solid {fg};
                 }}
 
-                /* ── Buttons ── */
-                button {{
+                /* ── Buttons ──
+                   Scoped to our own content so window-decoration controls
+                   (close/minimize/maximize) and other system-managed buttons
+                   keep their native GTK styling untouched. */
+                paned button,
+                box > button,
+                buttonbox > button {{
                     background: {button_bg};
                     color: {button_fg};
                     border: 1px solid {separator};
                     box-shadow: none;
+                    margin: 2px;
                 }}
-                button:hover {{
+                paned button:hover,
+                box > button:hover,
+                buttonbox > button:hover {{
                     background: {button_hover_bg};
                 }}
-                button.flat {{
+                paned button.flat,
+                box > button.flat,
+                buttonbox > button.flat {{
                     background: transparent;
                     border: none;
+                    margin: 0;
                 }}
-                button.flat:hover {{
+                paned button.flat:hover,
+                box > button.flat:hover,
+                buttonbox > button.flat:hover {{
                     background: {chrome};
+                }}
+                stackswitcher > button,
+                notebook > header tab button,
+                spinbutton button {{
+                    margin: 0;
+                    border: none;
                 }}
 
                 /* ── Labels, entries ── */
@@ -306,15 +325,52 @@ pub fn apply_app_theme(scheme_id: &str) {
                     border: 1px solid {input_border};
                     box-shadow: none;
                 }}
-                textview.commit-input {{
+                textview.commit-input,
+                textview.agent-input {{
                     background: {input_bg};
                     color: {fg};
                     border: 1px solid {input_border};
                     border-radius: 6px;
                 }}
-                textview.commit-input text {{
+                textview.commit-input text,
+                textview.agent-input text {{
                     background: transparent;
                     color: {fg};
+                }}
+                /* The agent-input text view sits inside a Frame; give the
+                   frame the input background so focus/selection rendering
+                   doesn't reveal the system default behind it. */
+                frame > scrolledwindow > textview.agent-input,
+                frame > textview.agent-input {{
+                    background: {input_bg};
+                }}
+
+                /* ── Agent send button (icon overlay in input box) ── */
+                button.agent-send-button {{
+                    min-width: 24px;
+                    min-height: 24px;
+                    padding: 2px;
+                    margin: 0;
+                    border-radius: 12px;
+                    border: none;
+                    box-shadow: none;
+                }}
+
+                /* ── Header bar menu button (hamburger) ──
+                   Make it blend with the titlebar instead of showing a
+                   system-default raised button background. */
+                headerbar menubutton > button,
+                headerbar > windowhandle menubutton > button {{
+                    background: transparent;
+                    color: {fg};
+                    border: none;
+                    box-shadow: none;
+                    margin: 0;
+                    padding: 2px 6px;
+                }}
+                headerbar menubutton > button:hover,
+                headerbar > windowhandle menubutton > button:hover {{
+                    background: alpha({fg}, 0.12);
                 }}
                 searchentry text {{
                     color: {fg};

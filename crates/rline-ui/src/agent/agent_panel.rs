@@ -168,9 +168,11 @@ impl AgentPanel {
         let input_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
         let input_view = gtk4::TextView::new();
+        input_view.add_css_class("agent-input");
         input_view.set_wrap_mode(gtk4::WrapMode::Word);
         input_view.set_left_margin(4);
-        input_view.set_right_margin(4);
+        // Leave room on the right so text doesn't run under the send button.
+        input_view.set_right_margin(32);
         input_view.set_top_margin(4);
         input_view.set_bottom_margin(4);
         // Set a height request for ~3 lines.
@@ -180,15 +182,23 @@ impl AgentPanel {
         input_scrolled.set_child(Some(&input_view));
         input_scrolled.set_max_content_height(120);
         input_scrolled.set_propagate_natural_height(true);
-        input_box.append(&input_scrolled);
 
-        let send_button = gtk4::Button::with_label("Send");
+        // Overlay the send button in the bottom-right corner of the text box.
+        let input_overlay = gtk4::Overlay::new();
+        input_overlay.set_child(Some(&input_scrolled));
+
+        let send_button = gtk4::Button::from_icon_name("document-send-symbolic");
         send_button.add_css_class("suggested-action");
-        send_button.set_margin_start(4);
+        send_button.add_css_class("circular");
+        send_button.add_css_class("agent-send-button");
+        send_button.set_tooltip_text(Some("Send"));
+        send_button.set_halign(gtk4::Align::End);
+        send_button.set_valign(gtk4::Align::End);
         send_button.set_margin_end(4);
         send_button.set_margin_bottom(4);
-        send_button.set_margin_top(2);
-        input_box.append(&send_button);
+        input_overlay.add_overlay(&send_button);
+
+        input_box.append(&input_overlay);
 
         input_frame.set_child(Some(&input_box));
         container.append(&input_frame);
