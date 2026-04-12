@@ -55,4 +55,26 @@ pub enum AiError {
     /// A regex compilation error.
     #[error("regex error: {0}")]
     Regex(#[from] regex::Error),
+
+    /// An MCP server returned a JSON-RPC error.
+    #[error("MCP server '{server}' error: {message}")]
+    McpServerError {
+        /// The name of the MCP server.
+        server: String,
+        /// The error message from the server.
+        message: String,
+    },
+
+    /// Failed to communicate with an MCP server process.
+    #[error("MCP transport error for '{server}': {detail}")]
+    McpTransport {
+        /// The name of the MCP server.
+        server: String,
+        /// Description of the transport failure.
+        detail: String,
+    },
+
+    /// MCP server configuration is invalid.
+    #[error("MCP config error: {0}")]
+    McpConfig(String),
 }

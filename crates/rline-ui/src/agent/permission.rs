@@ -47,6 +47,10 @@ pub fn should_auto_approve(
         // Interactive tools (ask_followup_question, attempt_completion) are always
         // handled specially by the agent loop — they don't need approval.
         ToolCategory::Interactive => true,
+        // Trusted MCP servers have their tools auto-approved.
+        ToolCategory::McpTrusted => true,
+        // Untrusted MCP servers always require explicit user approval.
+        ToolCategory::McpUntrusted => false,
     }
 }
 

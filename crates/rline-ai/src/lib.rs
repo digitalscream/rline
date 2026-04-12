@@ -14,6 +14,7 @@ pub mod agent;
 pub mod chat;
 pub mod client;
 pub mod error;
+pub mod mcp;
 pub mod runtime;
 pub mod tools;
 pub mod types;

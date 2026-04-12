@@ -17,6 +17,7 @@ pub mod search_files;
 pub mod write_to_file;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::chat::types::ToolDefinition;
 use crate::error::AiError;
@@ -59,6 +60,10 @@ pub enum ToolCategory {
     ExecuteCommand,
     /// Tools that interact with the user (ask questions, completion).
     Interactive,
+    /// Tools from a trusted MCP server (auto-approved).
+    McpTrusted,
+    /// Tools from an untrusted MCP server (always requires user approval).
+    McpUntrusted,
 }
 
 /// A tool that the AI agent can invoke.
@@ -82,14 +87,23 @@ pub trait Tool: Send + Sync {
 }
 
 /// Registry of available tools.
+///
+/// Wraps tools in an `Arc` so the registry can be cheaply cloned and shared
+/// across threads (e.g. into `spawn_blocking` closures).
+#[derive(Clone)]
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn Tool>>,
+    tools: Arc<Vec<Box<dyn Tool>>>,
 }
 
 impl ToolRegistry {
     /// Create a registry with all built-in tools.
     pub fn new() -> Self {
-        let tools: Vec<Box<dyn Tool>> = vec![
+        Self::with_extra_tools(Vec::new())
+    }
+
+    /// Create a registry with built-in tools plus additional tools (e.g. MCP tools).
+    pub fn with_extra_tools(extra: Vec<Box<dyn Tool>>) -> Self {
+        let mut tools: Vec<Box<dyn Tool>> = vec![
             Box::new(read_file::ReadFileTool),
             Box::new(write_to_file::WriteToFileTool),
             Box::new(replace_in_file::ReplaceInFileTool),
@@ -101,19 +115,30 @@ impl ToolRegistry {
             Box::new(attempt_completion::AttemptCompletionTool),
             Box::new(plan_mode_respond::PlanModeRespondTool),
         ];
-        Self { tools }
+        tools.extend(extra);
+        Self {
+            tools: Arc::new(tools),
+        }
     }
 
     /// Get tool definitions filtered by mode.
     ///
-    /// - Plan mode (`plan_mode=true`): read-only tools + `plan_mode_respond`
+    /// - Plan mode (`plan_mode=true`): read-only built-in tools + `plan_mode_respond` + all MCP tools
     /// - Act mode (`plan_mode=false`): all tools except `plan_mode_respond`
+    ///
+    /// MCP tools are always included regardless of mode because their
+    /// read-only status cannot be determined. The permission system
+    /// (`McpTrusted` / `McpUntrusted`) handles approval separately.
     pub fn definitions(&self, plan_mode: bool) -> Vec<ToolDefinition> {
         self.tools
             .iter()
             .filter(|t| {
                 if plan_mode {
                     t.is_read_only()
+                        || matches!(
+                            t.category(),
+                            ToolCategory::McpTrusted | ToolCategory::McpUntrusted
+                        )
                 } else {
                     t.name() != "plan_mode_respond"
                 }
