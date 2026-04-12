@@ -280,6 +280,13 @@ pub fn build_system_prompt(
         prompt.push_str(&memory);
     }
 
+    // ── Skills (Cline-compatible) ──
+    let skills = crate::skills::discover_skills(root);
+    if let Some(section) = crate::skills::format_skills_section(&skills) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&section);
+    }
+
     // ── MCP tools ──
     if let Some(summary) = mcp_tool_summary {
         if !summary.is_empty() {
@@ -481,6 +488,29 @@ mod tests {
             ChatMessage::user("q2"),
         ];
         assert_eq!(find_exchange_end(&msgs), 3);
+    }
+
+    #[test]
+    fn test_build_system_prompt_includes_discovered_skill() {
+        // Use a unique skill name so it can't collide with a real skill the
+        // dev machine might have in `~/.cline/skills`.
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let unique = "rline-test-skill-xyzzy";
+        let skills_dir = tmp.path().join(".cline").join("skills").join(unique);
+        std::fs::create_dir_all(&skills_dir).expect("mkdir");
+        std::fs::write(
+            skills_dir.join("SKILL.md"),
+            format!("---\nname: {unique}\ndescription: Greet the user warmly.\n---\nBody"),
+        )
+        .expect("write SKILL.md");
+
+        let prompt = build_system_prompt(&tmp.path().to_string_lossy(), "ACT", None, None);
+        assert!(prompt.contains("## Skills"), "Skills section must appear");
+        assert!(
+            prompt.contains(&format!("\"{unique}\": Greet the user warmly.")),
+            "skill listing missing: {prompt}"
+        );
+        assert!(prompt.contains("use_skill"));
     }
 
     #[test]
