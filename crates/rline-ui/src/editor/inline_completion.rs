@@ -129,6 +129,13 @@ impl InlineCompletion {
         ic
     }
 
+    /// Suppress (or resume) the `end-user-action` handler that auto-triggers
+    /// completions. Use this to bracket programmatic buffer edits (e.g. comment
+    /// toggling) that should not be interpreted as the user typing.
+    pub fn set_suppressing(&self, suppressed: bool) {
+        self.suppressing.set(suppressed);
+    }
+
     /// Accept all remaining ghost text (keep it in the buffer).
     pub fn accept_completion(&self) {
         if !self.has_ghost_text.get() {

@@ -52,6 +52,8 @@ pub struct KeyBindings {
     pub focus_agent: String,
     /// Quit application (Ctrl+Q).
     pub quit_app: String,
+    /// Toggle line comment on selection or current line (Ctrl+/).
+    pub toggle_comments: String,
 }
 
 impl Default for KeyBindings {
@@ -71,6 +73,7 @@ impl Default for KeyBindings {
             focus_terminal: "<Ctrl><Shift>W".to_owned(),
             focus_agent: "<Ctrl><Shift>A".to_owned(),
             quit_app: "<Ctrl>Q".to_owned(),
+            toggle_comments: "<Ctrl>slash".to_owned(),
         }
     }
 }
@@ -135,6 +138,10 @@ pub const SHORTCUT_DESCRIPTORS: &[ShortcutDescriptor] = &[
         action: "win.quit-app",
         label: "Quit application",
     },
+    ShortcutDescriptor {
+        action: "win.toggle-comments",
+        label: "Toggle line comment",
+    },
 ];
 
 impl KeyBindings {
@@ -157,6 +164,7 @@ impl KeyBindings {
             "win.focus-terminal" => Some(&self.focus_terminal),
             "win.focus-agent" => Some(&self.focus_agent),
             "win.quit-app" => Some(&self.quit_app),
+            "win.toggle-comments" => Some(&self.toggle_comments),
             _ => None,
         }
     }
@@ -180,6 +188,7 @@ impl KeyBindings {
             "win.focus-terminal" => self.focus_terminal = accel.to_owned(),
             "win.focus-agent" => self.focus_agent = accel.to_owned(),
             "win.quit-app" => self.quit_app = accel.to_owned(),
+            "win.toggle-comments" => self.toggle_comments = accel.to_owned(),
             _ => return false,
         }
         true
@@ -216,6 +225,7 @@ impl KeyBindings {
         if !rest.is_empty() {
             let key_label = match rest {
                 "backslash" => "\\",
+                "slash" => "/",
                 "space" => "Space",
                 "Return" | "KP_Enter" => "Enter",
                 "Tab" | "ISO_Left_Tab" => "Tab",
@@ -336,8 +346,23 @@ mod tests {
         }
         assert_eq!(
             SHORTCUT_DESCRIPTORS.len(),
-            14,
-            "should have exactly 14 shortcut descriptors"
+            15,
+            "should have exactly 15 shortcut descriptors"
+        );
+    }
+
+    #[test]
+    fn test_accel_to_label_slash() {
+        assert_eq!(KeyBindings::accel_to_label("<Ctrl>slash"), "Ctrl+/");
+    }
+
+    #[test]
+    fn test_toggle_comments_default_and_lookup() {
+        let kb = KeyBindings::default();
+        assert_eq!(kb.toggle_comments, "<Ctrl>slash");
+        assert_eq!(
+            kb.accel_for_action("win.toggle-comments"),
+            Some("<Ctrl>slash"),
         );
     }
 }
