@@ -27,17 +27,19 @@ cargo doc --no-deps --document-private-items --open  # Generate & view docs
 
 ## System Dependencies
 
-GTK4, GtkSourceView 5, and VTE4 development libraries must be installed:
+GTK4, GtkSourceView 5, and VTE4 development libraries must be installed. A
+Chromium or Chrome binary must also be on `PATH` for the agent's
+`browser_action` tool (`chromium`, `chromium-browser`, or `google-chrome`):
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev libgraphene-1.0-dev
+sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libvte-2.91-gtk4-dev libgraphene-1.0-dev chromium-browser
 
 # Fedora
-sudo dnf install -y gtk4-devel gtksourceview5-devel vte291-gtk4-devel graphene-devel
+sudo dnf install -y gtk4-devel gtksourceview5-devel vte291-gtk4-devel graphene-devel chromium
 
 # Arch
-sudo pacman -S gtk4 gtksourceview5 vte4 graphene
+sudo pacman -S gtk4 gtksourceview5 vte4 graphene chromium
 ```
 
 Requires Rust 1.85 or later.
@@ -64,6 +66,9 @@ Requires Rust 1.85 or later.
 | `regex` (1) | Regex search in tools and code definition extraction |
 | `bytes` (1) | Byte buffer handling for streaming responses |
 | `futures-core` (0.3) | Stream trait for reqwest byte streams |
+| `futures` (0.3) | `StreamExt` used by the agent's browser session |
+| `chromiumoxide` (0.7) | Headless Chromium driver for the `browser_action` agent tool |
+| `base64` (0.22) | Encoding PNG screenshots for multimodal tool results |
 
 **Planned but not yet used**: `ropey` (rope data structure).
 
@@ -120,6 +125,10 @@ rline/
           ask_followup_question.rs # Interactive: ask user for clarification
           attempt_completion.rs    # Interactive: signal task complete (Act mode only)
           plan_mode_respond.rs     # Interactive: present plan (Plan mode only)
+          browser_action.rs        # Headless Chromium: launch/click/type/scroll/close + screenshot
+        browser/
+          mod.rs
+          session.rs       # BrowserSession — chromiumoxide wrapper, console log capture
     rline-syntax/          # Tree-sitter integration — incremental syntax highlighting
       src/
         lib.rs             # Crate-level docs, re-exports
@@ -240,7 +249,8 @@ Three resizable columns using nested `gtk4::Paned` widgets (1px separators):
 - **Two modes**: Plan (read-only analysis) and Act (full execution), selectable via dropdown
 - **Plan mode**: read-only tools only (`read_file`, `list_files`, `search_files`, `list_code_definition_names`, `ask_followup_question`, `plan_mode_respond`). Model calls `plan_mode_respond` to present its plan; user then switches to Act mode.
 - **Act mode**: all tools including file writes, command execution, and `attempt_completion`
-- **10 built-in tools**: `read_file`, `write_to_file`, `replace_in_file`, `list_files`, `search_files`, `execute_command`, `list_code_definition_names`, `ask_followup_question`, `attempt_completion`, `plan_mode_respond`
+- **11 built-in tools**: `read_file`, `write_to_file`, `replace_in_file`, `list_files`, `search_files`, `execute_command`, `list_code_definition_names`, `ask_followup_question`, `attempt_completion`, `plan_mode_respond`, `browser_action`
+- **Browser tool** (`browser_action`): drives a headless Chromium via `chromiumoxide` to launch URLs, click at coordinates, type, scroll, and capture screenshots. One session persists across tool calls within a task. Results include the current URL, captured console logs, and a PNG screenshot — attached inline when the agent model is configured as multimodal (vision-capable), otherwise saved to `.agent-cache/screenshots/` with its path included in the tool output.
 - **Streaming responses**: text displayed as it arrives via SSE parsing, markdown rendered on completion
 - **Permission system**: auto-approve by category (read files, edit files, safe commands) with workspace boundary enforcement. Unsafe commands always require approval.
 - **Safe command detection**: whitelist of read-only/build/test commands matching Cline's classification; shell operators (`|`, `;`, `>`, `&`) force manual approval
@@ -274,7 +284,8 @@ Three tabs: **Editor**, **Completion**, **Agent**.
 - Endpoint URL (auto-appends `/chat/completions` if needed), API key, model
 - Max tokens, temperature, context length (tokens)
 - Command timeout (seconds)
-- Auto-approve permissions (Act mode only): read files, edit files, execute safe commands
+- Auto-approve permissions (Act mode only): read files, edit files, execute safe commands, browser actions
+- Browser: multimodal toggle (must match your model's vision capability), viewport width/height
 
 - Persisted as JSON at `~/.config/rline/settings.json`
 - Uses `#[serde(default)]` for forward-compatible deserialization

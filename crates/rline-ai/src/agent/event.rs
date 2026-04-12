@@ -47,6 +47,8 @@ pub enum AgentEvent {
         success: bool,
         /// Tool output text.
         output: String,
+        /// Optional PNG screenshot bytes from a browser action.
+        image_png: Option<Vec<u8>>,
     },
 
     /// A follow-up question from the agent for the user to answer.

@@ -16,14 +16,105 @@ pub enum Role {
     Tool,
 }
 
+/// The content of a chat message.
+///
+/// Serializes as either a bare JSON string (text-only) or an array of
+/// content parts (multimodal, matching OpenAI's content-parts format).
+/// The `#[serde(untagged)]` representation preserves wire compatibility
+/// with any OpenAI-compatible endpoint that only accepts string content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// Plain-text content — serializes as a JSON string.
+    Text(String),
+    /// An array of content parts, which may include text and images.
+    Parts(Vec<ContentPart>),
+}
+
+/// A single content part in a multimodal message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// A text segment.
+    Text {
+        /// The text content.
+        text: String,
+    },
+    /// An image, supplied as a URL or data URL.
+    ImageUrl {
+        /// The image URL payload.
+        image_url: ImageUrl,
+    },
+}
+
+/// An image reference for a content part.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    /// Either an `http(s)://` URL or a `data:image/...;base64,...` URL.
+    pub url: String,
+}
+
+impl MessageContent {
+    /// Create a plain-text content.
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text(s.into())
+    }
+
+    /// Create a multimodal content from text + a base64-encoded PNG.
+    pub fn text_with_png(text: impl Into<String>, png_base64: String) -> Self {
+        Self::Parts(vec![
+            ContentPart::Text { text: text.into() },
+            ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: format!("data:image/png;base64,{png_base64}"),
+                },
+            },
+        ])
+    }
+
+    /// Extract the concatenated text across all parts.
+    ///
+    /// Returns an empty string if the content is entirely non-text.
+    pub fn as_text(&self) -> String {
+        match self {
+            Self::Text(s) => s.clone(),
+            Self::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    /// Approximate character count for token-budget estimation.
+    pub fn char_len(&self) -> usize {
+        match self {
+            Self::Text(s) => s.len(),
+            Self::Parts(parts) => parts
+                .iter()
+                .map(|p| match p {
+                    ContentPart::Text { text } => text.len(),
+                    // Data URLs can be huge; approximate at a fixed cost to
+                    // avoid wildly inflating token estimates. The actual
+                    // vision token count is model-specific.
+                    ContentPart::ImageUrl { .. } => 1024,
+                })
+                .sum(),
+        }
+    }
+}
+
 /// A single message in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// The role of the message author.
     pub role: Role,
-    /// The text content of the message (may be absent for tool-call-only messages).
+    /// The content of the message (may be absent for tool-call-only messages).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     /// Tool calls requested by the assistant.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -37,7 +128,7 @@ impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: Role::System,
-            content: Some(content.into()),
+            content: Some(MessageContent::text(content)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -47,7 +138,7 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: Some(content.into()),
+            content: Some(MessageContent::text(content)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -57,7 +148,7 @@ impl ChatMessage {
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: Some(content.into()),
+            content: Some(MessageContent::text(content)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -67,17 +158,31 @@ impl ChatMessage {
     pub fn assistant_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: Role::Assistant,
-            content,
+            content: content.map(MessageContent::text),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
         }
     }
 
-    /// Create a tool result message.
+    /// Create a plain-text tool result message.
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
-            content: Some(content.into()),
+            content: Some(MessageContent::text(content)),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+
+    /// Create a multimodal tool result message with an inline PNG image.
+    pub fn tool_result_with_image(
+        tool_call_id: impl Into<String>,
+        text: impl Into<String>,
+        png_base64: String,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: Some(MessageContent::text_with_png(text, png_base64)),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
         }
@@ -226,7 +331,10 @@ mod tests {
     fn test_chat_message_system() {
         let msg = ChatMessage::system("You are helpful.");
         assert_eq!(msg.role, Role::System);
-        assert_eq!(msg.content.as_deref(), Some("You are helpful."));
+        assert_eq!(
+            msg.content.as_ref().map(MessageContent::as_text),
+            Some("You are helpful.".to_owned())
+        );
         assert!(msg.tool_calls.is_none());
     }
 
@@ -234,7 +342,10 @@ mod tests {
     fn test_chat_message_user() {
         let msg = ChatMessage::user("Hello");
         assert_eq!(msg.role, Role::User);
-        assert_eq!(msg.content.as_deref(), Some("Hello"));
+        assert_eq!(
+            msg.content.as_ref().map(MessageContent::as_text),
+            Some("Hello".to_owned())
+        );
     }
 
     #[test]
@@ -242,7 +353,37 @@ mod tests {
         let msg = ChatMessage::tool_result("call_123", "file contents here");
         assert_eq!(msg.role, Role::Tool);
         assert_eq!(msg.tool_call_id.as_deref(), Some("call_123"));
-        assert_eq!(msg.content.as_deref(), Some("file contents here"));
+        assert_eq!(
+            msg.content.as_ref().map(MessageContent::as_text),
+            Some("file contents here".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_text_message_serializes_as_bare_string() {
+        let msg = ChatMessage::user("hi");
+        let json = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(json["content"], serde_json::json!("hi"));
+    }
+
+    #[test]
+    fn test_multimodal_tool_result_serialization() {
+        let msg = ChatMessage::tool_result_with_image(
+            "call_1",
+            "Screenshot attached.",
+            "iVBORw0KGgo=".to_owned(),
+        );
+        let json = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(json["role"], "tool");
+        let parts = json["content"].as_array().expect("parts array");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[0]["text"], "Screenshot attached.");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/png;base64,iVBORw0KGgo="
+        );
     }
 
     #[test]

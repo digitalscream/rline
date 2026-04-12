@@ -67,10 +67,27 @@ impl ConversationContext {
         self.maybe_truncate();
     }
 
-    /// Add a tool result message.
+    /// Add a plain-text tool result message.
     pub fn add_tool_result(&mut self, tool_call_id: impl Into<String>, content: impl Into<String>) {
         self.messages
             .push(ChatMessage::tool_result(tool_call_id, content));
+        self.maybe_truncate();
+    }
+
+    /// Add a multimodal tool result message with an inline PNG image.
+    ///
+    /// `png_base64` must be the raw base64 payload (no `data:` prefix).
+    pub fn add_tool_result_with_image(
+        &mut self,
+        tool_call_id: impl Into<String>,
+        text: impl Into<String>,
+        png_base64: String,
+    ) {
+        self.messages.push(ChatMessage::tool_result_with_image(
+            tool_call_id,
+            text,
+            png_base64,
+        ));
         self.maybe_truncate();
     }
 
@@ -127,7 +144,7 @@ impl ConversationContext {
 
             if let Some(content) = &msg.content {
                 out.push('\n');
-                out.push_str(content);
+                out.push_str(&content.as_text());
                 out.push('\n');
             }
 
@@ -180,7 +197,7 @@ impl ConversationContext {
 
 /// Count approximate characters in a message (content + tool call arguments).
 fn message_char_count(m: &ChatMessage) -> usize {
-    let content_len = m.content.as_ref().map_or(0, |c| c.len());
+    let content_len = m.content.as_ref().map_or(0, |c| c.char_len());
     let tool_calls_len = m.tool_calls.as_ref().map_or(0, |tc| {
         tc.iter()
             .map(|t| t.function.name.len() + t.function.arguments.len())

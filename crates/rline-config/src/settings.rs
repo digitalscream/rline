@@ -113,10 +113,19 @@ pub struct EditorSettings {
     /// Auto-approve command execution tool calls.
     #[serde(default)]
     pub agent_auto_approve_command: bool,
-    /// YOLO mode: skip approval for commands that affect the system outside
-    /// the project directory (e.g. `apt install`, `sudo`, global npm installs).
+    /// Auto-approve browser_action tool calls.
     #[serde(default)]
-    pub agent_yolo_mode: bool,
+    pub agent_auto_approve_browser: bool,
+    /// Whether the configured agent model accepts multimodal (image) input.
+    /// When true, the browser tool attaches screenshots inline in tool results.
+    #[serde(default)]
+    pub agent_multimodal: bool,
+    /// Browser viewport width in pixels for the browser_action tool.
+    #[serde(default = "default_browser_viewport_width")]
+    pub agent_browser_viewport_width: u32,
+    /// Browser viewport height in pixels for the browser_action tool.
+    #[serde(default = "default_browser_viewport_height")]
+    pub agent_browser_viewport_height: u32,
     /// Timeout in seconds for agent command execution.
     #[serde(default = "default_agent_command_timeout")]
     pub agent_command_timeout_secs: u32,
@@ -172,7 +181,10 @@ impl Default for EditorSettings {
             agent_auto_approve_read: true,
             agent_auto_approve_edit: false,
             agent_auto_approve_command: false,
-            agent_yolo_mode: false,
+            agent_auto_approve_browser: false,
+            agent_multimodal: false,
+            agent_browser_viewport_width: default_browser_viewport_width(),
+            agent_browser_viewport_height: default_browser_viewport_height(),
             agent_command_timeout_secs: default_agent_command_timeout(),
             agent_context_length: default_agent_context_length(),
             agent_max_turns: default_agent_max_turns(),
@@ -254,6 +266,16 @@ fn default_agent_command_timeout() -> u32 {
 /// Default context length in tokens for the agent model.
 fn default_agent_context_length() -> u32 {
     128_000
+}
+
+/// Default browser viewport width for the browser_action tool.
+fn default_browser_viewport_width() -> u32 {
+    900
+}
+
+/// Default browser viewport height for the browser_action tool.
+fn default_browser_viewport_height() -> u32 {
+    600
 }
 
 /// Default maximum tool-use turns for the agent loop.
@@ -432,7 +454,10 @@ mod tests {
             agent_auto_approve_read: true,
             agent_auto_approve_edit: true,
             agent_auto_approve_command: false,
-            agent_yolo_mode: false,
+            agent_auto_approve_browser: false,
+            agent_multimodal: true,
+            agent_browser_viewport_width: 1024,
+            agent_browser_viewport_height: 768,
             agent_command_timeout_secs: 60,
             agent_context_length: 256_000,
             agent_max_turns: 75,
