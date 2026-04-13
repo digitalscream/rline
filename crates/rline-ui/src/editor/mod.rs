@@ -5,6 +5,7 @@ mod bracket_completion;
 mod editor_pane;
 mod find_bar;
 mod inline_completion;
+mod minimap;
 mod settings_dialog;
 mod split_container;
 mod syntax_highlighter;
