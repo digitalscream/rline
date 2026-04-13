@@ -19,7 +19,7 @@ const MAX_TOOL_RETRIES: u32 = 3;
 
 use crate::agent::context::{build_system_prompt, ConversationContext};
 use crate::agent::event::AgentEvent;
-use crate::chat::client::{ChatClient, StreamEvent};
+use crate::chat::client::{AgentChatClient, StreamEvent};
 use crate::chat::types::ToolCall;
 use crate::mcp::manager::McpManager;
 use crate::tools::{BrowserConfig, Tool, ToolCategory, ToolRegistry, ToolResult};
@@ -45,7 +45,7 @@ pub type AutoApproveFn = Box<dyn Fn(&str, ToolCategory, &str) -> bool + Send + S
 
 /// The core agent loop orchestrator.
 pub struct AgentLoop {
-    client: ChatClient,
+    client: Box<dyn AgentChatClient>,
     context: ConversationContext,
     registry: ToolRegistry,
     mode: AgentMode,
@@ -68,7 +68,7 @@ impl AgentLoop {
     /// Create a new agent loop with a fresh conversation context.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        client: ChatClient,
+        client: Box<dyn AgentChatClient>,
         mode: AgentMode,
         event_tx: mpsc::Sender<AgentEvent>,
         auto_approve: AutoApproveFn,
@@ -126,7 +126,7 @@ impl AgentLoop {
     /// Create an agent loop that continues an existing conversation.
     #[allow(clippy::too_many_arguments)]
     pub fn with_context(
-        client: ChatClient,
+        client: Box<dyn AgentChatClient>,
         mode: AgentMode,
         context: ConversationContext,
         event_tx: mpsc::Sender<AgentEvent>,

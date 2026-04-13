@@ -8,6 +8,18 @@ use crate::error::ConfigError;
 use crate::keybindings::KeyBindings;
 use crate::paths;
 
+/// Which backend the agent talks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentProvider {
+    /// An OpenAI-compatible `/v1/chat/completions` endpoint (llama.cpp, vLLM,
+    /// Ollama, OpenAI itself, etc.).
+    #[default]
+    OpenAI,
+    /// The Anthropic Messages API (Claude).
+    Anthropic,
+}
+
 /// Editor settings that are persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -89,15 +101,37 @@ pub struct EditorSettings {
     pub ai_trigger_mode: String,
 
     // ── AI Agent ──
-    /// Full URL to the chat completions endpoint for the agent.
-    #[serde(default = "default_agent_endpoint_url")]
-    pub agent_endpoint_url: String,
-    /// Bearer token for the agent API (empty = no auth; if empty, falls back to `ai_api_key`).
+    /// Which backend the agent talks to.
     #[serde(default)]
-    pub agent_api_key: String,
-    /// Model identifier for agent requests.
+    pub agent_provider: AgentProvider,
+    /// Full URL to the OpenAI-compatible chat completions endpoint (used when
+    /// `agent_provider == OpenAI`). Also deserializes from the legacy
+    /// `agent_endpoint_url` key written by older rline versions.
+    #[serde(
+        default = "default_agent_openai_endpoint_url",
+        alias = "agent_endpoint_url"
+    )]
+    pub agent_openai_endpoint_url: String,
+    /// Bearer token for the OpenAI-compatible agent API (empty = fall back to
+    /// `ai_api_key`). Deserializes from the legacy `agent_api_key` key too.
+    #[serde(default, alias = "agent_api_key")]
+    pub agent_openai_api_key: String,
+    /// Model identifier for OpenAI-compatible agent requests. Deserializes
+    /// from the legacy `agent_model` key too.
+    #[serde(default, alias = "agent_model")]
+    pub agent_openai_model: String,
+    /// Whether the OpenAI-compatible agent model accepts multimodal (image)
+    /// input. When true, the browser tool attaches screenshots inline in tool
+    /// results. Deserializes from the legacy `agent_multimodal` key too.
+    #[serde(default, alias = "agent_multimodal")]
+    pub agent_openai_multimodal: bool,
+    /// API key for the Anthropic Messages API (used when
+    /// `agent_provider == Anthropic`).
     #[serde(default)]
-    pub agent_model: String,
+    pub agent_anthropic_api_key: String,
+    /// Claude model identifier (e.g. `claude-sonnet-4-6`).
+    #[serde(default = "default_agent_anthropic_model")]
+    pub agent_anthropic_model: String,
     /// Maximum tokens to generate per agent response.
     #[serde(default = "default_agent_max_tokens")]
     pub agent_max_tokens: u32,
@@ -116,10 +150,6 @@ pub struct EditorSettings {
     /// Auto-approve browser_action tool calls.
     #[serde(default)]
     pub agent_auto_approve_browser: bool,
-    /// Whether the configured agent model accepts multimodal (image) input.
-    /// When true, the browser tool attaches screenshots inline in tool results.
-    #[serde(default)]
-    pub agent_multimodal: bool,
     /// Browser viewport width in pixels for the browser_action tool.
     #[serde(default = "default_browser_viewport_width")]
     pub agent_browser_viewport_width: u32,
@@ -173,16 +203,19 @@ impl Default for EditorSettings {
             ai_max_lines: default_ai_max_lines(),
             ai_temperature: 0.0,
             ai_trigger_mode: default_ai_trigger_mode(),
-            agent_endpoint_url: default_agent_endpoint_url(),
-            agent_api_key: String::new(),
-            agent_model: String::new(),
+            agent_provider: AgentProvider::default(),
+            agent_openai_endpoint_url: default_agent_openai_endpoint_url(),
+            agent_openai_api_key: String::new(),
+            agent_openai_model: String::new(),
+            agent_openai_multimodal: false,
+            agent_anthropic_api_key: String::new(),
+            agent_anthropic_model: default_agent_anthropic_model(),
             agent_max_tokens: default_agent_max_tokens(),
             agent_temperature: 0.0,
             agent_auto_approve_read: true,
             agent_auto_approve_edit: false,
             agent_auto_approve_command: false,
             agent_auto_approve_browser: false,
-            agent_multimodal: false,
             agent_browser_viewport_width: default_browser_viewport_width(),
             agent_browser_viewport_height: default_browser_viewport_height(),
             agent_command_timeout_secs: default_agent_command_timeout(),
@@ -248,9 +281,14 @@ fn default_ai_trigger_mode() -> String {
     "automatic".to_owned()
 }
 
-/// Default agent endpoint URL.
-fn default_agent_endpoint_url() -> String {
+/// Default OpenAI-compatible agent endpoint URL.
+fn default_agent_openai_endpoint_url() -> String {
     "http://localhost:8080/v1/chat/completions".to_owned()
+}
+
+/// Default Claude model identifier for the Anthropic provider.
+fn default_agent_anthropic_model() -> String {
+    "claude-sonnet-4-6".to_owned()
 }
 
 /// Default max tokens for agent responses.
@@ -446,16 +484,19 @@ mod tests {
             ai_max_lines: 5,
             ai_temperature: 0.2,
             ai_trigger_mode: "both".to_owned(),
-            agent_endpoint_url: "http://example.com/v1/chat/completions".to_owned(),
-            agent_api_key: "agent-key".to_owned(),
-            agent_model: "qwen-2.5".to_owned(),
+            agent_provider: AgentProvider::Anthropic,
+            agent_openai_endpoint_url: "http://example.com/v1/chat/completions".to_owned(),
+            agent_openai_api_key: "agent-key".to_owned(),
+            agent_openai_model: "qwen-2.5".to_owned(),
+            agent_openai_multimodal: true,
+            agent_anthropic_api_key: "sk-ant-test".to_owned(),
+            agent_anthropic_model: "claude-opus-4-6".to_owned(),
             agent_max_tokens: 8192,
             agent_temperature: 0.1,
             agent_auto_approve_read: true,
             agent_auto_approve_edit: true,
             agent_auto_approve_command: false,
             agent_auto_approve_browser: false,
-            agent_multimodal: true,
             agent_browser_viewport_width: 1024,
             agent_browser_viewport_height: 768,
             agent_command_timeout_secs: 60,
@@ -538,6 +579,75 @@ mod tests {
             settings.ai_trigger_mode, "automatic",
             "ai_trigger_mode should default to automatic"
         );
+    }
+
+    #[test]
+    fn test_agent_provider_default_is_openai() {
+        let settings = EditorSettings::default();
+        assert_eq!(
+            settings.agent_provider,
+            AgentProvider::OpenAI,
+            "default agent provider should be OpenAI"
+        );
+    }
+
+    #[test]
+    fn test_agent_anthropic_model_has_default() {
+        let settings = EditorSettings::default();
+        assert_eq!(
+            settings.agent_anthropic_model, "claude-sonnet-4-6",
+            "default Claude model should be Sonnet 4.6"
+        );
+    }
+
+    #[test]
+    fn test_legacy_agent_fields_migrate_via_alias() {
+        // Old-format settings file from before the provider split.
+        let json = r#"{
+            "agent_endpoint_url": "http://legacy/v1/chat/completions",
+            "agent_api_key": "legacy-key",
+            "agent_model": "legacy-model",
+            "agent_multimodal": true
+        }"#;
+        let settings: EditorSettings =
+            serde_json::from_str(json).expect("legacy JSON should deserialize");
+
+        assert_eq!(
+            settings.agent_openai_endpoint_url, "http://legacy/v1/chat/completions",
+            "legacy agent_endpoint_url should migrate to agent_openai_endpoint_url"
+        );
+        assert_eq!(
+            settings.agent_openai_api_key, "legacy-key",
+            "legacy agent_api_key should migrate to agent_openai_api_key"
+        );
+        assert_eq!(
+            settings.agent_openai_model, "legacy-model",
+            "legacy agent_model should migrate to agent_openai_model"
+        );
+        assert!(
+            settings.agent_openai_multimodal,
+            "legacy agent_multimodal should migrate to agent_openai_multimodal"
+        );
+        assert_eq!(
+            settings.agent_provider,
+            AgentProvider::OpenAI,
+            "legacy files imply the OpenAI provider"
+        );
+    }
+
+    #[test]
+    fn test_agent_provider_round_trip_anthropic() {
+        let original = EditorSettings {
+            agent_provider: AgentProvider::Anthropic,
+            agent_anthropic_model: "claude-opus-4-6".to_owned(),
+            agent_anthropic_api_key: "sk-ant-abc".to_owned(),
+            ..EditorSettings::default()
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        let restored: EditorSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.agent_provider, AgentProvider::Anthropic);
+        assert_eq!(restored.agent_anthropic_model, "claude-opus-4-6");
+        assert_eq!(restored.agent_anthropic_api_key, "sk-ant-abc");
     }
 
     #[test]

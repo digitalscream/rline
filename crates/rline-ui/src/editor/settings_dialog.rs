@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 
-use rline_config::EditorSettings;
+use rline_config::{AgentProvider, EditorSettings};
 
 use rline_ai::agent::context::DEFAULT_SYSTEM_PROMPT;
 
@@ -136,16 +136,19 @@ impl SettingsDialog {
                     ai_max_lines: cp.max_lines_spin.value() as u32,
                     ai_temperature: cp.temperature_spin.value(),
                     // Agent page
-                    agent_endpoint_url: ap.endpoint_entry.text().to_string(),
-                    agent_api_key: ap.api_key_entry.text().to_string(),
-                    agent_model: ap.model_entry.text().to_string(),
+                    agent_provider: ap.read_provider(),
+                    agent_openai_endpoint_url: ap.openai_endpoint_entry.text().to_string(),
+                    agent_openai_api_key: ap.openai_api_key_entry.text().to_string(),
+                    agent_openai_model: ap.openai_model_entry.text().to_string(),
+                    agent_openai_multimodal: ap.openai_multimodal_switch.is_active(),
+                    agent_anthropic_api_key: ap.anthropic_api_key_entry.text().to_string(),
+                    agent_anthropic_model: ap.anthropic_model_entry.text().to_string(),
                     agent_max_tokens: ap.max_tokens_spin.value() as u32,
                     agent_temperature: ap.temperature_spin.value(),
                     agent_auto_approve_read: ap.auto_approve_read_switch.is_active(),
                     agent_auto_approve_edit: ap.auto_approve_edit_switch.is_active(),
                     agent_auto_approve_command: ap.auto_approve_command_switch.is_active(),
                     agent_auto_approve_browser: ap.auto_approve_browser_switch.is_active(),
-                    agent_multimodal: ap.multimodal_switch.is_active(),
                     agent_browser_viewport_width: ap.browser_width_spin.value() as u32,
                     agent_browser_viewport_height: ap.browser_height_spin.value() as u32,
                     agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
@@ -514,31 +517,119 @@ impl SettingsDialog {
         content.set_margin_start(16);
         content.set_margin_end(16);
 
-        // Endpoint URL
-        let endpoint_row = Self::make_row("Endpoint URL");
-        let endpoint_entry = gtk4::Entry::builder()
-            .text(&settings.agent_endpoint_url)
+        // ── Provider selector ──
+        let provider_row = Self::make_row("Provider");
+        let provider_dropdown =
+            gtk4::DropDown::from_strings(&["OpenAI-compatible", "Anthropic (Claude)"]);
+        provider_dropdown.set_selected(match settings.agent_provider {
+            AgentProvider::OpenAI => 0,
+            AgentProvider::Anthropic => 1,
+        });
+        provider_row.append(&provider_dropdown);
+
+        // ── OpenAI-compatible group ──
+        let openai_group = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+
+        let openai_endpoint_row = Self::make_row("Endpoint URL");
+        let openai_endpoint_entry = gtk4::Entry::builder()
+            .text(&settings.agent_openai_endpoint_url)
             .hexpand(true)
             .build();
-        endpoint_row.append(&endpoint_entry);
+        openai_endpoint_row.append(&openai_endpoint_entry);
 
-        // API Key
-        let api_key_row = Self::make_row("API Key");
-        let api_key_entry = gtk4::PasswordEntry::builder()
+        let openai_api_key_row = Self::make_row("API Key");
+        let openai_api_key_entry = gtk4::PasswordEntry::builder()
             .show_peek_icon(true)
             .hexpand(true)
             .build();
-        api_key_entry.set_text(&settings.agent_api_key);
-        api_key_row.append(&api_key_entry);
+        openai_api_key_entry.set_text(&settings.agent_openai_api_key);
+        openai_api_key_row.append(&openai_api_key_entry);
 
-        // Model
-        let model_row = Self::make_row("Model");
-        let model_entry = gtk4::Entry::builder()
-            .text(&settings.agent_model)
+        let openai_model_row = Self::make_row("Model");
+        let openai_model_entry = gtk4::Entry::builder()
+            .text(&settings.agent_openai_model)
             .placeholder_text("e.g. qwen-2.5, deepseek-r1")
             .hexpand(true)
             .build();
-        model_row.append(&model_entry);
+        openai_model_row.append(&openai_model_entry);
+
+        let openai_multimodal_row = Self::make_row("Model supports vision (multimodal)");
+        let openai_multimodal_switch = gtk4::Switch::new();
+        openai_multimodal_switch.set_active(settings.agent_openai_multimodal);
+        openai_multimodal_switch.set_valign(gtk4::Align::Center);
+        openai_multimodal_row.append(&openai_multimodal_switch);
+
+        openai_group.append(&openai_endpoint_row);
+        openai_group.append(&openai_api_key_row);
+        openai_group.append(&openai_model_row);
+        openai_group.append(&openai_multimodal_row);
+
+        // ── Anthropic group ──
+        let anthropic_group = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+
+        let anthropic_api_key_row = Self::make_row("API Key");
+        let anthropic_api_key_entry = gtk4::PasswordEntry::builder()
+            .show_peek_icon(true)
+            .hexpand(true)
+            .build();
+        anthropic_api_key_entry.set_text(&settings.agent_anthropic_api_key);
+        anthropic_api_key_row.append(&anthropic_api_key_entry);
+
+        let anthropic_model_row = Self::make_row("Model");
+        let anthropic_model_entry = gtk4::Entry::builder()
+            .text(&settings.agent_anthropic_model)
+            .placeholder_text("claude-sonnet-4-6")
+            .hexpand(true)
+            .build();
+        const CLAUDE_PRESETS: &[&str] = &[
+            "Presets…",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ];
+        let anthropic_preset_dropdown = gtk4::DropDown::from_strings(CLAUDE_PRESETS);
+        anthropic_preset_dropdown.set_selected(0);
+        {
+            let entry = anthropic_model_entry.clone();
+            anthropic_preset_dropdown.connect_selected_notify(move |dd| {
+                let idx = dd.selected();
+                if idx == 0 {
+                    return;
+                }
+                if let Some(preset) = CLAUDE_PRESETS.get(idx as usize) {
+                    entry.set_text(preset);
+                }
+                // Snap back to the "Presets…" placeholder so the same preset can
+                // be reselected.
+                dd.set_selected(0);
+            });
+        }
+        anthropic_model_row.append(&anthropic_model_entry);
+        anthropic_model_row.append(&anthropic_preset_dropdown);
+
+        let anthropic_endpoint_info = gtk4::Label::new(None);
+        anthropic_endpoint_info.set_markup(
+            "<small>Endpoint: <tt>https://api.anthropic.com/v1/messages</tt> (fixed)</small>",
+        );
+        anthropic_endpoint_info.set_halign(gtk4::Align::Start);
+        anthropic_endpoint_info.set_margin_top(2);
+
+        anthropic_group.append(&anthropic_api_key_row);
+        anthropic_group.append(&anthropic_model_row);
+        anthropic_group.append(&anthropic_endpoint_info);
+
+        // Wire visibility toggle.
+        {
+            let og = openai_group.clone();
+            let ag = anthropic_group.clone();
+            let update = move |dd: &gtk4::DropDown| {
+                let openai = dd.selected() == 0;
+                og.set_visible(openai);
+                ag.set_visible(!openai);
+            };
+            update(&provider_dropdown);
+            provider_dropdown.connect_selected_notify(update);
+        }
 
         // Max Tokens
         let max_tokens_row = Self::make_row("Max Tokens");
@@ -639,13 +730,6 @@ impl SettingsDialog {
         browser_header.set_halign(gtk4::Align::Start);
         browser_header.set_margin_top(8);
 
-        // Multimodal toggle
-        let multimodal_row = Self::make_row("Model supports vision (multimodal)");
-        let multimodal_switch = gtk4::Switch::new();
-        multimodal_switch.set_active(settings.agent_multimodal);
-        multimodal_switch.set_valign(gtk4::Align::Center);
-        multimodal_row.append(&multimodal_switch);
-
         // Viewport width
         let width_row = Self::make_row("Browser viewport width (px)");
         let browser_width_spin = gtk4::SpinButton::with_range(320.0, 3840.0, 10.0);
@@ -658,9 +742,9 @@ impl SettingsDialog {
         browser_height_spin.set_value(settings.agent_browser_viewport_height as f64);
         height_row.append(&browser_height_spin);
 
-        content.append(&endpoint_row);
-        content.append(&api_key_row);
-        content.append(&model_row);
+        content.append(&provider_row);
+        content.append(&openai_group);
+        content.append(&anthropic_group);
         content.append(&max_tokens_row);
         content.append(&temperature_row);
         content.append(&context_row);
@@ -673,7 +757,6 @@ impl SettingsDialog {
         content.append(&approve_command_row);
         content.append(&approve_browser_row);
         content.append(&browser_header);
-        content.append(&multimodal_row);
         content.append(&width_row);
         content.append(&height_row);
 
@@ -685,9 +768,13 @@ impl SettingsDialog {
 
         AgentPageWidgets {
             scrolled,
-            endpoint_entry,
-            api_key_entry,
-            model_entry,
+            provider_dropdown,
+            openai_endpoint_entry,
+            openai_api_key_entry,
+            openai_model_entry,
+            openai_multimodal_switch,
+            anthropic_api_key_entry,
+            anthropic_model_entry,
             max_tokens_spin,
             temperature_spin,
             context_length_spin,
@@ -697,7 +784,6 @@ impl SettingsDialog {
             auto_approve_edit_switch,
             auto_approve_command_switch,
             auto_approve_browser_switch,
-            multimodal_switch,
             browser_width_spin,
             browser_height_spin,
         }
@@ -1168,9 +1254,13 @@ impl CompletionPageWidgets {
 #[derive(Clone)]
 struct AgentPageWidgets {
     scrolled: gtk4::ScrolledWindow,
-    endpoint_entry: gtk4::Entry,
-    api_key_entry: gtk4::PasswordEntry,
-    model_entry: gtk4::Entry,
+    provider_dropdown: gtk4::DropDown,
+    openai_endpoint_entry: gtk4::Entry,
+    openai_api_key_entry: gtk4::PasswordEntry,
+    openai_model_entry: gtk4::Entry,
+    openai_multimodal_switch: gtk4::Switch,
+    anthropic_api_key_entry: gtk4::PasswordEntry,
+    anthropic_model_entry: gtk4::Entry,
     max_tokens_spin: gtk4::SpinButton,
     temperature_spin: gtk4::SpinButton,
     context_length_spin: gtk4::SpinButton,
@@ -1180,7 +1270,15 @@ struct AgentPageWidgets {
     auto_approve_edit_switch: gtk4::Switch,
     auto_approve_command_switch: gtk4::Switch,
     auto_approve_browser_switch: gtk4::Switch,
-    multimodal_switch: gtk4::Switch,
     browser_width_spin: gtk4::SpinButton,
     browser_height_spin: gtk4::SpinButton,
+}
+
+impl AgentPageWidgets {
+    fn read_provider(&self) -> AgentProvider {
+        match self.provider_dropdown.selected() {
+            0 => AgentProvider::OpenAI,
+            _ => AgentProvider::Anthropic,
+        }
+    }
 }

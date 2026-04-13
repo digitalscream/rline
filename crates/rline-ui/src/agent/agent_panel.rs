@@ -17,7 +17,9 @@ use tracing::warn;
 use rline_ai::agent::context::ConversationContext;
 use rline_ai::agent::event::AgentEvent;
 use rline_ai::agent::r#loop::{AgentLoop, AgentMode};
-use rline_ai::chat::client::ChatClient;
+use rline_ai::chat::client::AgentChatClient;
+use rline_ai::chat::{AnthropicClient, ChatClient};
+use rline_config::AgentProvider;
 
 use super::message_widget;
 use super::permission;
@@ -390,26 +392,52 @@ impl AgentPanel {
             }
         };
 
-        // Determine the effective API key (agent-specific or fallback to inline completion key).
-        let api_key = if settings.agent_api_key.is_empty() {
-            settings.ai_api_key.clone()
-        } else {
-            settings.agent_api_key.clone()
-        };
-
-        if settings.agent_model.is_empty() {
-            let err = message_widget::build_error(
-                "No agent model configured. Set agent_model in Settings.",
-            );
-            self.messages_box.append(&err);
-            return;
-        }
-
-        let client = ChatClient::new(
-            &settings.agent_endpoint_url,
-            &api_key,
-            &settings.agent_model,
-        );
+        let (client, is_multimodal): (Box<dyn AgentChatClient>, bool) =
+            match settings.agent_provider {
+                AgentProvider::OpenAI => {
+                    // Fall back to the FIM completion key if the agent-specific key is empty.
+                    let api_key = if settings.agent_openai_api_key.is_empty() {
+                        settings.ai_api_key.clone()
+                    } else {
+                        settings.agent_openai_api_key.clone()
+                    };
+                    if settings.agent_openai_model.is_empty() {
+                        let err = message_widget::build_error(
+                            "No agent model configured. Set the model in Settings → Agent.",
+                        );
+                        self.messages_box.append(&err);
+                        return;
+                    }
+                    let c = ChatClient::new(
+                        &settings.agent_openai_endpoint_url,
+                        &api_key,
+                        &settings.agent_openai_model,
+                    );
+                    (Box::new(c), settings.agent_openai_multimodal)
+                }
+                AgentProvider::Anthropic => {
+                    if settings.agent_anthropic_api_key.is_empty() {
+                        let err = message_widget::build_error(
+                            "No Anthropic API key configured. Set it in Settings → Agent.",
+                        );
+                        self.messages_box.append(&err);
+                        return;
+                    }
+                    if settings.agent_anthropic_model.is_empty() {
+                        let err = message_widget::build_error(
+                            "No Claude model configured. Set it in Settings → Agent.",
+                        );
+                        self.messages_box.append(&err);
+                        return;
+                    }
+                    let c = AnthropicClient::new(
+                        &settings.agent_anthropic_api_key,
+                        &settings.agent_anthropic_model,
+                    );
+                    // All current Claude models are multimodal.
+                    (Box::new(c), true)
+                }
+            };
 
         let selected_mode = self.mode_dropdown.selected();
         let is_yolo = selected_mode == 2;
@@ -466,7 +494,7 @@ impl AgentPanel {
                 settings.agent_browser_viewport_width,
                 settings.agent_browser_viewport_height,
             ),
-            multimodal: settings.agent_multimodal,
+            multimodal: is_multimodal,
         };
         // Spawn the agent loop on the AI runtime, reusing context if available.
         let ws_root2 = workspace_root.clone();
