@@ -22,6 +22,32 @@ pub enum StreamEvent {
     },
 }
 
+/// Provider-agnostic streaming chat client used by the agent loop.
+///
+/// Implementors translate the canonical [`ChatRequest`] into their own wire
+/// format and emit [`StreamEvent`]s as text/tool-call data arrives.
+pub trait AgentChatClient: Send + Sync + 'static {
+    /// Send a streaming chat completion request.
+    ///
+    /// Returns a tokio async channel receiver that yields [`StreamEvent`]
+    /// values as they are parsed. The sending task must respect `cancel`.
+    fn send_streaming(
+        &self,
+        request: ChatRequest,
+        cancel: CancellationToken,
+    ) -> tokio::sync::mpsc::Receiver<StreamEvent>;
+}
+
+impl AgentChatClient for ChatClient {
+    fn send_streaming(
+        &self,
+        request: ChatRequest,
+        cancel: CancellationToken,
+    ) -> tokio::sync::mpsc::Receiver<StreamEvent> {
+        ChatClient::send_streaming(self, request, cancel)
+    }
+}
+
 /// Client for the OpenAI-compatible `/v1/chat/completions` endpoint.
 #[derive(Debug, Clone)]
 pub struct ChatClient {

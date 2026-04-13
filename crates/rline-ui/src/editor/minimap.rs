@@ -252,9 +252,8 @@ fn collect_line_runs(buffer: &sourceview5::Buffer) -> Vec<Vec<LineRun>> {
 
             let mut next = iter;
             let moved = next.forward_to_tag_toggle(None::<&gtk4::TextTag>);
-            let use_next = moved
-                && next.offset() > iter.offset()
-                && next.offset() <= line_end.offset();
+            let use_next =
+                moved && next.offset() > iter.offset() && next.offset() <= line_end.offset();
             let end_iter = if use_next { next } else { line_end };
 
             let end_off = end_iter.line_offset();
@@ -544,10 +543,7 @@ mod tests {
         let v = minimap_click_to_scroll_value(100.0, 200.0, LONG_LINES, 0.0, 1000.0, 0.0, 100.0);
         let content_height = (LONG_LINES as f64) * LINE_STRIDE;
         let expected = (100.0 / content_height) * 1000.0 - 50.0;
-        assert!(
-            (v - expected).abs() < 1e-6,
-            "expected ~{expected}, got {v}"
-        );
+        assert!((v - expected).abs() < 1e-6, "expected ~{expected}, got {v}");
     }
 
     #[test]
@@ -556,10 +552,7 @@ mod tests {
         // Clicking minimap y=100 should map to content_y=750, frac=0.5.
         let v = minimap_click_to_scroll_value(100.0, 200.0, LONG_LINES, 0.0, 1000.0, 450.0, 100.0);
         let expected = 0.5 * 1000.0 - 50.0; // doc_center - page/2
-        assert!(
-            (v - expected).abs() < 1e-6,
-            "expected {expected}, got {v}"
-        );
+        assert!((v - expected).abs() < 1e-6, "expected {expected}, got {v}");
     }
 
     #[test]
