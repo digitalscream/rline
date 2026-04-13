@@ -14,6 +14,7 @@ use crate::editor::block_completion::BlockCompletion;
 use crate::editor::bracket_completion::BracketCompletion;
 use crate::editor::find_bar::FindBar;
 use crate::editor::inline_completion::InlineCompletion;
+use crate::editor::minimap::Minimap;
 use crate::editor::syntax_highlighter::SyntaxHighlighter;
 use crate::error::UiError;
 
@@ -40,6 +41,8 @@ pub struct EditorTab {
     use_treesitter: bool,
     /// Per-tab find/replace bar (overlaid top-right).
     find_bar: FindBar,
+    /// Per-tab minimap (overlaid right edge, semi-transparent).
+    _minimap: Minimap,
     /// AI inline completion handler (None when AI is disabled).
     inline_completion: Rc<RefCell<Option<InlineCompletion>>>,
     /// Automatic bracket/quote pair completion (kept alive for the key controller).
@@ -89,10 +92,12 @@ impl EditorTab {
             .hexpand(true)
             .build();
 
-        // Overlay: scrolled editor as main child, find bar floats on top
+        // Overlay: scrolled editor as main child, find bar + minimap float on top
         let find_bar = FindBar::new(&buffer, &view);
+        let minimap = Minimap::new(&buffer, &view);
         let overlay = gtk4::Overlay::new();
         overlay.set_child(Some(&scrolled));
+        overlay.add_overlay(minimap.widget());
         overlay.add_overlay(find_bar.widget());
         overlay.set_vexpand(true);
         overlay.set_hexpand(true);
@@ -167,6 +172,7 @@ impl EditorTab {
             highlighter,
             use_treesitter: settings.use_treesitter,
             find_bar,
+            _minimap: minimap,
             inline_completion: Rc::new(RefCell::new(inline_completion)),
             _bracket_completion: bracket_completion,
             _block_completion: block_completion,
