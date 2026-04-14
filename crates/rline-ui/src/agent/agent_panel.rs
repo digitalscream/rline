@@ -110,10 +110,7 @@ impl AgentPanel {
 
         // ── Header: mode selector + new task + stop ──
         let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-        header_box.set_margin_top(4);
-        header_box.set_margin_start(4);
-        header_box.set_margin_end(4);
-        header_box.set_margin_bottom(4);
+        header_box.add_css_class("agent-header");
 
         let mode_model = gtk4::StringList::new(&["Act", "Plan", "YOLO"]);
         let mode_dropdown = gtk4::DropDown::new(Some(mode_model), gtk4::Expression::NONE);
@@ -145,6 +142,7 @@ impl AgentPanel {
 
         let context_label = gtk4::Label::new(None);
         context_label.add_css_class("dim-label");
+        context_label.add_css_class("agent-context-badge");
         context_label.set_halign(gtk4::Align::End);
         header_box.append(&context_label);
 
@@ -156,16 +154,14 @@ impl AgentPanel {
         scrolled.set_hscrollbar_policy(gtk4::PolicyType::Never);
 
         let messages_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        messages_box.add_css_class("agent-messages");
         messages_box.set_valign(gtk4::Align::Start);
         scrolled.set_child(Some(&messages_box));
         container.append(&scrolled);
 
         // ── Input area ──
         let input_frame = gtk4::Frame::new(None);
-        input_frame.set_margin_start(4);
-        input_frame.set_margin_end(4);
-        input_frame.set_margin_bottom(4);
-        input_frame.set_margin_top(4);
+        input_frame.add_css_class("agent-input-frame");
 
         let input_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
@@ -1099,7 +1095,7 @@ fn show_working_indicator(
         let mut count = dot_count.borrow_mut();
         *count = (*count % 3) + 1;
         let dots = ".".repeat(*count as usize);
-        label.set_markup(&format!("<i>Working{dots}</i>"));
+        label.set_text(&format!("Working{dots}"));
         glib::ControlFlow::Continue
     });
     *working_timer.borrow_mut() = Some(source_id);

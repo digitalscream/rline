@@ -357,13 +357,148 @@ pub fn apply_app_theme(scheme_id: &str) {
 
                 /* ── Agent send button (icon overlay in input box) ── */
                 button.agent-send-button {{
-                    min-width: 24px;
-                    min-height: 24px;
+                    min-width: 26px;
+                    min-height: 26px;
                     padding: 2px;
                     margin: 0;
-                    border-radius: 12px;
+                    border-radius: 13px;
                     border: none;
                     box-shadow: none;
+                    background: {button_bg};
+                    color: {button_fg};
+                }}
+                button.agent-send-button:hover {{
+                    background: alpha({fg}, 0.20);
+                }}
+
+                /* ── Agent panel ── */
+                box.agent-header {{
+                    background: {chrome_darker};
+                    border-bottom: 1px solid {separator};
+                    padding: 6px 8px;
+                    min-height: 32px;
+                }}
+                box.agent-header dropdown > button {{
+                    min-height: 24px;
+                    padding: 2px 8px;
+                    background: alpha({fg}, 0.06);
+                    border: 1px solid alpha({fg}, 0.12);
+                    border-radius: 4px;
+                    margin: 0;
+                }}
+                box.agent-header dropdown > button:hover {{
+                    background: alpha({fg}, 0.10);
+                }}
+                box.agent-header > button.flat {{
+                    min-height: 24px;
+                    min-width: 24px;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                }}
+                label.agent-context-badge {{
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    border-radius: 10px;
+                    background: alpha({fg}, 0.06);
+                    color: {fg_dim};
+                }}
+                box.agent-messages {{
+                    background: {chrome};
+                    padding: 4px 0;
+                }}
+                box.agent-message {{
+                    margin: 4px 8px;
+                    padding: 8px 10px;
+                    border-radius: 8px;
+                }}
+                box.agent-message-user {{
+                    background: alpha({fg}, 0.05);
+                    border: 1px solid alpha({fg}, 0.08);
+                }}
+                box.agent-message-ai {{
+                    background: transparent;
+                }}
+                box.agent-message-header image {{
+                    -gtk-icon-size: 14px;
+                    color: {fg_dim};
+                }}
+                box.agent-message-header label {{
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: {fg_dim};
+                }}
+                box.agent-tool-card {{
+                    margin: 4px 8px;
+                    border: 1px solid alpha({fg}, 0.10);
+                    border-radius: 8px;
+                    background: alpha({fg}, 0.03);
+                }}
+                box.agent-tool-card > button.agent-tool-card-header {{
+                    padding: 6px 8px;
+                    background: transparent;
+                    border: none;
+                    box-shadow: none;
+                    border-radius: 8px;
+                    margin: 0;
+                }}
+                box.agent-tool-card > button.agent-tool-card-header:hover {{
+                    background: alpha({fg}, 0.05);
+                }}
+                image.agent-tool-arrow {{
+                    -gtk-icon-size: 12px;
+                    color: {fg_dim};
+                }}
+                box.agent-tool-card-detail {{
+                    padding: 2px 10px 8px 10px;
+                }}
+                box.agent-tool-card-detail label.monospace {{
+                    font-size: 11px;
+                    background: alpha({fg}, 0.04);
+                    border-radius: 4px;
+                    padding: 6px 8px;
+                }}
+                label.agent-status-pill {{
+                    font-size: 10px;
+                    font-weight: 600;
+                    padding: 1px 8px;
+                    border-radius: 8px;
+                    margin-right: 4px;
+                }}
+                label.agent-status-success {{
+                    background: alpha(#73c991, 0.18);
+                    color: #73c991;
+                }}
+                label.agent-status-failed {{
+                    background: alpha(#e06c75, 0.18);
+                    color: #e06c75;
+                }}
+                box.agent-card {{
+                    margin: 6px 8px;
+                    padding: 10px 12px;
+                    border-radius: 8px;
+                    background: alpha({fg}, 0.04);
+                    border: 1px solid alpha({fg}, 0.08);
+                }}
+                box.agent-card-completion {{ border-left: 3px solid #73c991; }}
+                box.agent-card-question   {{ border-left: 3px solid #61afef; }}
+                box.agent-card-plan       {{ border-left: 3px solid #c678dd; }}
+                box.agent-card-error      {{
+                    border-left: 3px solid #e06c75;
+                    background: alpha(#e06c75, 0.06);
+                }}
+                label.agent-working {{
+                    color: {fg_dim};
+                    font-style: italic;
+                    font-size: 12px;
+                }}
+                frame.agent-input-frame {{
+                    background: {input_bg};
+                    border: 1px solid {input_border};
+                    border-radius: 8px;
+                    margin: 6px 8px 8px 8px;
+                }}
+                frame.agent-input-frame:focus-within {{
+                    border-color: alpha({fg}, 0.40);
                 }}
 
                 /* ── Header bar menu button (hamburger) ──
