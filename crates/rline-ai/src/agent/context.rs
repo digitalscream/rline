@@ -3,6 +3,8 @@
 //! Maintains the message history and system prompt for multi-turn
 //! chat completions conversations, with token-aware truncation.
 
+use serde::{Deserialize, Serialize};
+
 use crate::chat::types::{ChatMessage, ChatRequest, Role, ToolDefinition};
 
 /// Approximate characters per token (conservative estimate for English text).
@@ -24,7 +26,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant integr
 All file paths should be relative to the workspace root unless they are absolute paths."#;
 
 /// Manages the conversation history for an agent session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationContext {
     /// The system prompt, always the first message.
     system_prompt: String,
@@ -121,6 +123,21 @@ impl ConversationContext {
     /// Get the number of messages (excluding system prompt).
     pub fn message_count(&self) -> usize {
         self.messages.len()
+    }
+
+    /// Borrow the conversation messages (excluding the system prompt).
+    pub fn messages(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+
+    /// Serialise the full context as pretty-printed JSON.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Reconstruct a context from JSON produced by [`Self::to_json`].
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
     }
 
     /// Export the conversation as a human-readable Markdown string
@@ -511,6 +528,43 @@ mod tests {
             "skill listing missing: {prompt}"
         );
         assert!(prompt.contains("use_skill"));
+    }
+
+    #[test]
+    fn test_json_round_trip_preserves_messages() {
+        use crate::chat::types::{FunctionCall, ToolCall};
+
+        let mut ctx = ConversationContext::new("sys prompt", 100_000);
+        ctx.add_user_message("find the bug");
+        ctx.add_assistant_tool_calls(
+            Some("let me look".to_owned()),
+            vec![ToolCall {
+                id: "call_1".to_owned(),
+                call_type: "function".to_owned(),
+                function: FunctionCall {
+                    name: "read_file".to_owned(),
+                    arguments: r#"{"path":"src/main.rs"}"#.to_owned(),
+                },
+            }],
+        );
+        ctx.add_tool_result("call_1", "fn main() {}");
+        ctx.add_assistant_message("found it");
+
+        let json = ctx.to_json().expect("serialise");
+        let round = ConversationContext::from_json(&json).expect("deserialise");
+
+        assert_eq!(round.message_count(), ctx.message_count());
+        assert_eq!(round.system_prompt, ctx.system_prompt);
+        assert_eq!(round.max_tokens(), ctx.max_tokens());
+        let before = ctx.to_request("m", vec![], None, None);
+        let after = round.to_request("m", vec![], None, None);
+        assert_eq!(before.messages.len(), after.messages.len());
+    }
+
+    #[test]
+    fn test_from_json_rejects_malformed_input() {
+        let err = ConversationContext::from_json("not json").unwrap_err();
+        assert!(!err.to_string().is_empty());
     }
 
     #[test]
