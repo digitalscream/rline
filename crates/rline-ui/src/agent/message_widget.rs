@@ -5,18 +5,29 @@
 
 use gtk4::prelude::*;
 
+/// Build a header row with a small role icon and a name label.
+fn build_role_header(icon: &str, name: &str) -> gtk4::Box {
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("agent-message-header");
+    header.set_halign(gtk4::Align::Start);
+
+    let image = gtk4::Image::from_icon_name(icon);
+    header.append(&image);
+
+    let label = gtk4::Label::new(Some(name));
+    label.set_halign(gtk4::Align::Start);
+    header.append(&label);
+
+    header
+}
+
 /// Build a user message widget.
 pub fn build_user_message(text: &str) -> gtk4::Box {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
+    container.add_css_class("agent-message");
+    container.add_css_class("agent-message-user");
 
-    let header = gtk4::Label::new(Some("You"));
-    header.set_halign(gtk4::Align::Start);
-    header.set_markup("<b>You</b>");
-    container.append(&header);
+    container.append(&build_role_header("avatar-default-symbolic", "You"));
 
     let label = gtk4::Label::new(Some(text));
     label.set_halign(gtk4::Align::Start);
@@ -34,15 +45,13 @@ pub fn build_user_message(text: &str) -> gtk4::Box {
 /// Returns the container and the content label (for streaming updates).
 pub fn build_ai_message() -> (gtk4::Box, gtk4::Label) {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
+    container.add_css_class("agent-message");
+    container.add_css_class("agent-message-ai");
 
-    let header = gtk4::Label::new(None);
-    header.set_halign(gtk4::Align::Start);
-    header.set_markup("<b>Assistant</b>");
-    container.append(&header);
+    container.append(&build_role_header(
+        "applications-science-symbolic",
+        "Assistant",
+    ));
 
     let label = gtk4::Label::new(None);
     label.set_halign(gtk4::Align::Start);
@@ -77,19 +86,16 @@ pub struct ToolCallWidget {
 /// the arguments and result. Includes a slot for approve/deny buttons.
 pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(0);
-    container.set_margin_bottom(0);
+    container.add_css_class("agent-tool-card");
 
     // Header with toggle.
     let header_btn = gtk4::Button::new();
     header_btn.add_css_class("flat");
-    let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-    header_box.set_margin_start(4);
-    header_box.set_margin_end(4);
+    header_btn.add_css_class("agent-tool-card-header");
+    let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
 
-    let arrow = gtk4::Label::new(Some("\u{25B6}")); // ▶
+    let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+    arrow.add_css_class("agent-tool-arrow");
     header_box.append(&arrow);
 
     let summary = tool_call_summary(name, arguments);
@@ -114,10 +120,8 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     revealer.set_reveal_child(false);
     revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
 
-    let detail_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    detail_box.set_margin_start(8);
-    detail_box.set_margin_end(8);
-    detail_box.set_margin_bottom(2);
+    let detail_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    detail_box.add_css_class("agent-tool-card-detail");
 
     // Arguments display.
     if !arguments.is_empty() {
@@ -138,7 +142,7 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     }
 
     // Result area (populated later).
-    let result_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    let result_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     detail_box.append(&result_box);
 
     revealer.set_child(Some(&detail_box));
@@ -146,9 +150,9 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
 
     // Approval button box (populated when needed).
     let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-    button_box.set_margin_start(8);
-    button_box.set_margin_end(8);
-    button_box.set_margin_bottom(2);
+    button_box.set_margin_start(10);
+    button_box.set_margin_end(10);
+    button_box.set_margin_bottom(6);
     button_box.set_halign(gtk4::Align::Start);
     container.append(&button_box);
 
@@ -158,7 +162,11 @@ pub fn build_tool_call(name: &str, arguments: &str) -> ToolCallWidget {
     header_btn.connect_clicked(move |_| {
         let revealed = rev_clone.reveals_child();
         rev_clone.set_reveal_child(!revealed);
-        arrow_clone.set_text(if revealed { "\u{25B6}" } else { "\u{25BC}" });
+        arrow_clone.set_icon_name(Some(if revealed {
+            "pan-end-symbolic"
+        } else {
+            "pan-down-symbolic"
+        }));
     });
 
     ToolCallWidget {
@@ -195,16 +203,17 @@ pub fn add_tool_result(
         result_box.remove(&child);
     }
 
-    let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
-    sep.set_margin_top(4);
-    sep.set_margin_bottom(4);
-    result_box.append(&sep);
-
-    let status_text = if success { "Success" } else { "Failed" };
-    let status_label = gtk4::Label::new(None);
-    status_label.set_markup(&format!("<small><i>{status_text}</i></small>"));
-    status_label.set_halign(gtk4::Align::Start);
-    result_box.append(&status_label);
+    let status_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    status_row.set_halign(gtk4::Align::Start);
+    let status_label = gtk4::Label::new(Some(if success { "Success" } else { "Failed" }));
+    status_label.add_css_class("agent-status-pill");
+    status_label.add_css_class(if success {
+        "agent-status-success"
+    } else {
+        "agent-status-failed"
+    });
+    status_row.append(&status_label);
+    result_box.append(&status_row);
 
     // Truncate very long output for display.
     let display_output = if output.len() > 2000 {
@@ -213,14 +222,16 @@ pub fn add_tool_result(
         output.to_owned()
     };
 
-    let output_label = gtk4::Label::new(Some(&display_output));
-    output_label.set_halign(gtk4::Align::Start);
-    output_label.set_wrap(true);
-    output_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
-    output_label.set_selectable(true);
-    output_label.set_xalign(0.0);
-    output_label.add_css_class("monospace");
-    result_box.append(&output_label);
+    if !display_output.is_empty() {
+        let output_label = gtk4::Label::new(Some(&display_output));
+        output_label.set_halign(gtk4::Align::Start);
+        output_label.set_wrap(true);
+        output_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+        output_label.set_selectable(true);
+        output_label.set_xalign(0.0);
+        output_label.add_css_class("monospace");
+        result_box.append(&output_label);
+    }
 
     if let Some(png) = image_png {
         if let Some(picture) = build_screenshot_picture(png) {
@@ -245,21 +256,19 @@ fn build_screenshot_picture(png: &[u8]) -> Option<gtk4::Picture> {
 
 /// Build a task completion widget.
 pub fn build_completion(summary: &str) -> gtk4::Box {
-    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
-    container.add_css_class("card");
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    container.add_css_class("agent-card");
+    container.add_css_class("agent-card-completion");
 
-    let header = gtk4::Label::new(None);
-    header.set_markup("<b>Task Complete</b>");
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("agent-message-header");
     header.set_halign(gtk4::Align::Start);
-    header.set_margin_start(4);
-    header.set_margin_top(4);
+    header.append(&gtk4::Image::from_icon_name("emblem-ok-symbolic"));
+    let header_label = gtk4::Label::new(Some("Task Complete"));
+    header.append(&header_label);
     container.append(&header);
 
-    let label = gtk4::Label::new(Some(summary));
+    let label = gtk4::Label::new(None);
     let pango = super::markdown::markdown_to_pango(summary);
     label.set_markup(&pango);
     label.set_halign(gtk4::Align::Start);
@@ -267,9 +276,6 @@ pub fn build_completion(summary: &str) -> gtk4::Box {
     label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
     label.set_selectable(true);
     label.set_xalign(0.0);
-    label.set_margin_start(4);
-    label.set_margin_end(4);
-    label.set_margin_bottom(4);
     container.append(&label);
 
     container
@@ -279,35 +285,28 @@ pub fn build_completion(summary: &str) -> gtk4::Box {
 ///
 /// Returns the container, the text view (for reading the answer), and the submit button.
 pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gtk4::Button) {
-    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
-    container.add_css_class("card");
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    container.add_css_class("agent-card");
+    container.add_css_class("agent-card-question");
 
-    let header = gtk4::Label::new(None);
-    header.set_markup("<b>Question from Agent</b>");
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("agent-message-header");
     header.set_halign(gtk4::Align::Start);
-    header.set_margin_start(4);
-    header.set_margin_top(4);
+    header.append(&gtk4::Image::from_icon_name("dialog-question-symbolic"));
+    let header_label = gtk4::Label::new(Some("Question from Agent"));
+    header.append(&header_label);
     container.append(&header);
 
-    let question_label = gtk4::Label::new(Some(question));
+    let question_label = gtk4::Label::new(None);
     let pango = super::markdown::markdown_to_pango(question);
     question_label.set_markup(&pango);
     question_label.set_halign(gtk4::Align::Start);
     question_label.set_wrap(true);
     question_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
     question_label.set_xalign(0.0);
-    question_label.set_margin_start(4);
-    question_label.set_margin_end(4);
     container.append(&question_label);
 
     let input_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    input_box.set_margin_start(4);
-    input_box.set_margin_end(4);
-    input_box.set_margin_bottom(4);
 
     let text_view = gtk4::TextView::new();
     text_view.add_css_class("agent-input");
@@ -324,6 +323,7 @@ pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gt
 
     let submit = gtk4::Button::with_label("Submit");
     submit.add_css_class("suggested-action");
+    submit.set_halign(gtk4::Align::End);
     input_box.append(&submit);
 
     container.append(&input_box);
@@ -337,25 +337,23 @@ pub fn build_followup_question(question: &str) -> (gtk4::Box, gtk4::TextView, gt
 /// Build a prompt shown after Plan mode completes, telling the user to switch to Act mode.
 pub fn build_plan_mode_prompt() -> gtk4::Box {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(8);
-    container.set_margin_bottom(4);
-    container.add_css_class("card");
+    container.add_css_class("agent-card");
+    container.add_css_class("agent-card-plan");
+
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("agent-message-header");
+    header.set_halign(gtk4::Align::Start);
+    header.append(&gtk4::Image::from_icon_name("document-properties-symbolic"));
+    let header_label = gtk4::Label::new(Some("Plan Complete"));
+    header.append(&header_label);
+    container.append(&header);
 
     let label = gtk4::Label::new(None);
-    label.set_markup(
-        "<b>Plan complete.</b> Switch to <b>Act</b> mode and instruct the agent to proceed \
-         with the plan.",
-    );
+    label.set_markup("Switch to <b>Act</b> mode and instruct the agent to proceed with the plan.");
     label.set_halign(gtk4::Align::Start);
     label.set_wrap(true);
     label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
     label.set_xalign(0.0);
-    label.set_margin_start(8);
-    label.set_margin_end(8);
-    label.set_margin_top(8);
-    label.set_margin_bottom(8);
     container.append(&label);
 
     container
@@ -436,18 +434,15 @@ fn extract_tool_detail(name: &str, arguments: &str) -> Option<String> {
 /// content hidden behind a revealer.
 pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(2);
-    container.set_margin_bottom(2);
+    container.add_css_class("agent-tool-card");
 
     let header_btn = gtk4::Button::new();
     header_btn.add_css_class("flat");
-    let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-    header_box.set_margin_start(4);
-    header_box.set_margin_end(4);
+    header_btn.add_css_class("agent-tool-card-header");
+    let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
 
-    let arrow = gtk4::Label::new(Some("\u{25B6}")); // ▶
+    let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+    arrow.add_css_class("agent-tool-arrow");
     header_box.append(&arrow);
 
     let label_text = if duration_secs == 1 {
@@ -456,10 +451,8 @@ pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
         format!("Thought for {duration_secs} seconds")
     };
     let name_label = gtk4::Label::new(None);
-    name_label.set_markup(&format!(
-        "<small><i>{}</i></small>",
-        glib::markup_escape_text(&label_text)
-    ));
+    name_label.set_markup(&format!("<i>{}</i>", glib::markup_escape_text(&label_text)));
+    name_label.add_css_class("dim-label");
     name_label.set_halign(gtk4::Align::Start);
     header_box.append(&name_label);
 
@@ -470,7 +463,7 @@ pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
     revealer.set_reveal_child(false);
     revealer.set_transition_type(gtk4::RevealerTransitionType::SlideDown);
 
-    let content_label = gtk4::Label::new(Some(content));
+    let content_label = gtk4::Label::new(None);
     let pango = super::markdown::markdown_to_pango(content);
     content_label.set_markup(&pango);
     content_label.set_halign(gtk4::Align::Start);
@@ -478,10 +471,12 @@ pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
     content_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
     content_label.set_selectable(true);
     content_label.set_xalign(0.0);
-    content_label.set_margin_start(8);
-    content_label.set_margin_end(8);
-    content_label.set_margin_bottom(4);
-    revealer.set_child(Some(&content_label));
+
+    let detail_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    detail_box.add_css_class("agent-tool-card-detail");
+    detail_box.append(&content_label);
+
+    revealer.set_child(Some(&detail_box));
     container.append(&revealer);
 
     let rev_clone = revealer.clone();
@@ -489,7 +484,11 @@ pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
     header_btn.connect_clicked(move |_| {
         let revealed = rev_clone.reveals_child();
         rev_clone.set_reveal_child(!revealed);
-        arrow_clone.set_text(if revealed { "\u{25B6}" } else { "\u{25BC}" });
+        arrow_clone.set_icon_name(Some(if revealed {
+            "pan-end-symbolic"
+        } else {
+            "pan-down-symbolic"
+        }));
     });
 
     container
@@ -500,18 +499,16 @@ pub fn build_thinking_block(content: &str, duration_secs: u64) -> gtk4::Box {
 /// Returns the container box and the label (for updating the dot animation).
 pub fn build_working_indicator() -> (gtk4::Box, gtk4::Label) {
     let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
+    container.add_css_class("agent-message");
+    container.add_css_class("agent-message-ai");
 
-    let header = gtk4::Label::new(None);
-    header.set_markup("<b>Assistant</b>");
-    header.set_halign(gtk4::Align::Start);
-    container.append(&header);
+    container.append(&build_role_header(
+        "applications-science-symbolic",
+        "Assistant",
+    ));
 
-    let label = gtk4::Label::new(None);
-    label.set_markup("<i>Working.</i>");
+    let label = gtk4::Label::new(Some("Working."));
+    label.add_css_class("agent-working");
     label.set_halign(gtk4::Align::Start);
     label.set_xalign(0.0);
     container.append(&label);
@@ -521,20 +518,23 @@ pub fn build_working_indicator() -> (gtk4::Box, gtk4::Label) {
 
 /// Build an error message widget.
 pub fn build_error(message: &str) -> gtk4::Box {
-    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    container.set_margin_start(8);
-    container.set_margin_end(8);
-    container.set_margin_top(4);
-    container.set_margin_bottom(4);
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    container.add_css_class("agent-card");
+    container.add_css_class("agent-card-error");
 
-    let label = gtk4::Label::new(None);
-    label.set_markup(&format!(
-        "<span foreground=\"red\"><b>Error:</b> {}</span>",
-        glib::markup_escape_text(message)
-    ));
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("agent-message-header");
+    header.set_halign(gtk4::Align::Start);
+    header.append(&gtk4::Image::from_icon_name("dialog-error-symbolic"));
+    let header_label = gtk4::Label::new(Some("Error"));
+    header.append(&header_label);
+    container.append(&header);
+
+    let label = gtk4::Label::new(Some(message));
     label.set_halign(gtk4::Align::Start);
     label.set_wrap(true);
     label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+    label.set_selectable(true);
     label.set_xalign(0.0);
     container.append(&label);
 
