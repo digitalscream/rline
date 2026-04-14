@@ -501,6 +501,115 @@ pub fn apply_app_theme(scheme_id: &str) {
                     border-color: alpha({fg}, 0.40);
                 }}
 
+                /* ── Agent tab switcher (Chat / History) ── */
+                stackswitcher.agent-tab-switcher {{
+                    background: {chrome_darker};
+                    padding: 4px;
+                    border-bottom: 1px solid {separator};
+                }}
+                stackswitcher.agent-tab-switcher > button {{
+                    min-height: 24px;
+                    padding: 2px 14px;
+                    margin: 0 2px;
+                    background: transparent;
+                    color: {fg_dim};
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    box-shadow: none;
+                }}
+                stackswitcher.agent-tab-switcher > button:hover {{
+                    background: alpha({fg}, 0.08);
+                    color: {fg};
+                }}
+                stackswitcher.agent-tab-switcher > button:checked {{
+                    background: alpha({fg}, 0.10);
+                    color: {fg};
+                    border-color: alpha({fg}, 0.14);
+                }}
+
+                /* ── Agent history tab ──
+                   GTK4's GtkListBox has CSS node name `list` (not `listbox`).
+                   Adwaita paints `list` with @theme_base_color (the editor
+                   base colour) which is wrong for this chrome-styled pane, so
+                   force `{chrome}` on every descendant and strip any inherited
+                   gradient. */
+                box.agent-history-page,
+                box.agent-history-page scrolledwindow,
+                box.agent-history-page scrolledwindow > viewport,
+                box.agent-history-page list,
+                box.agent-history-page list > row,
+                box.agent-history-page list > row:hover,
+                box.agent-history-page list > row:selected {{
+                    background-color: {chrome};
+                    background-image: none;
+                }}
+                list.agent-history-list > row.agent-history-row {{
+                    padding: 0;
+                }}
+                box.agent-history-card {{
+                    margin: 6px 8px;
+                    padding: 10px 12px;
+                    border-radius: 8px;
+                    background-color: alpha({fg}, 0.04);
+                    background-image: none;
+                    border: 1px solid alpha({fg}, 0.08);
+                }}
+                list.agent-history-list > row:hover box.agent-history-card {{
+                    background-color: alpha({fg}, 0.07);
+                    border-color: alpha({fg}, 0.16);
+                }}
+                image.agent-history-icon {{
+                    -gtk-icon-size: 14px;
+                    color: {fg_dim};
+                }}
+                label.agent-history-title {{
+                    font-weight: 600;
+                    font-size: 12px;
+                    color: {fg};
+                }}
+                label.agent-history-preview {{
+                    color: {fg_dim};
+                    font-size: 12px;
+                }}
+                label.agent-history-badge {{
+                    font-size: 10px;
+                    font-weight: 600;
+                    padding: 1px 8px;
+                    border-radius: 8px;
+                    background: alpha({fg}, 0.08);
+                    color: {fg_dim};
+                }}
+                button.agent-history-open,
+                button.agent-history-delete {{
+                    min-height: 22px;
+                    padding: 2px 10px;
+                    border-radius: 6px;
+                    background: alpha({fg}, 0.08);
+                    color: {fg};
+                    border: 1px solid alpha({fg}, 0.12);
+                    box-shadow: none;
+                }}
+                button.agent-history-open:hover,
+                button.agent-history-delete:hover {{
+                    background: alpha({fg}, 0.14);
+                }}
+                button.agent-history-open:disabled {{
+                    opacity: 0.45;
+                }}
+                button.agent-history-delete {{
+                    min-width: 22px;
+                    padding: 2px 6px;
+                }}
+                button.agent-history-delete:hover {{
+                    background: alpha(#e06c75, 0.20);
+                    border-color: alpha(#e06c75, 0.40);
+                    color: #e06c75;
+                }}
+                box.agent-history-placeholder image.agent-history-placeholder-icon {{
+                    color: {fg_dim};
+                    opacity: 0.5;
+                }}
+
                 /* ── Header bar menu button (hamburger) ──
                    Make it blend with the titlebar instead of showing a
                    system-default raised button background. */

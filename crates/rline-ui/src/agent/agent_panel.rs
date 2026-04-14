@@ -21,6 +21,7 @@ use rline_ai::chat::client::AgentChatClient;
 use rline_ai::chat::{AnthropicClient, ChatClient};
 use rline_config::AgentProvider;
 
+use super::history::{self, HistoryEntry};
 use super::message_widget;
 use super::permission;
 
@@ -88,6 +89,10 @@ pub struct AgentPanel {
     working_indicator: Rc<RefCell<Option<gtk4::Box>>>,
     /// Source ID for the "Working..." dot animation timer.
     working_timer: Rc<RefCell<Option<glib::SourceId>>>,
+    /// Stack holding the Chat and History pages.
+    stack: gtk4::Stack,
+    /// ListBox containing discovered history entries.
+    history_list: gtk4::ListBox,
 }
 
 impl std::fmt::Debug for AgentPanel {
@@ -107,6 +112,20 @@ impl AgentPanel {
     pub fn new() -> Self {
         let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         container.set_vexpand(true);
+
+        // ── Tab switcher (Chat / History) ──
+        let stack = gtk4::Stack::new();
+        stack.set_transition_type(gtk4::StackTransitionType::Crossfade);
+        stack.set_vexpand(true);
+
+        let tab_switcher = gtk4::StackSwitcher::new();
+        tab_switcher.set_stack(Some(&stack));
+        tab_switcher.set_halign(gtk4::Align::Center);
+        tab_switcher.add_css_class("agent-tab-switcher");
+        container.append(&tab_switcher);
+
+        let chat_page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        chat_page.set_vexpand(true);
 
         // ── Header: mode selector + new task + stop ──
         let header_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
@@ -146,7 +165,7 @@ impl AgentPanel {
         context_label.set_halign(gtk4::Align::End);
         header_box.append(&context_label);
 
-        container.append(&header_box);
+        chat_page.append(&header_box);
 
         // ── Scrolled message area ──
         let scrolled = gtk4::ScrolledWindow::new();
@@ -157,7 +176,7 @@ impl AgentPanel {
         messages_box.add_css_class("agent-messages");
         messages_box.set_valign(gtk4::Align::Start);
         scrolled.set_child(Some(&messages_box));
-        container.append(&scrolled);
+        chat_page.append(&scrolled);
 
         // ── Input area ──
         let input_frame = gtk4::Frame::new(None);
@@ -199,7 +218,15 @@ impl AgentPanel {
         input_box.append(&input_overlay);
 
         input_frame.set_child(Some(&input_box));
-        container.append(&input_frame);
+        chat_page.append(&input_frame);
+
+        stack.add_titled(&chat_page, Some("chat"), "Chat");
+
+        // ── History page ──
+        let (history_page, history_list) = build_history_page();
+        stack.add_titled(&history_page, Some("history"), "History");
+
+        container.append(&stack);
 
         let panel = Self {
             container,
@@ -224,6 +251,8 @@ impl AgentPanel {
             context_label,
             working_indicator: Rc::new(RefCell::new(None)),
             working_timer: Rc::new(RefCell::new(None)),
+            stack,
+            history_list,
         };
 
         panel.connect_signals();
@@ -306,6 +335,184 @@ impl AgentPanel {
         let panel = self.clone();
         self.new_task_button.connect_clicked(move |_| {
             panel.clear_messages();
+        });
+
+        // Refresh history list whenever the History tab becomes visible.
+        let panel = self.clone();
+        self.stack.connect_visible_child_notify(move |stack| {
+            if stack.visible_child_name().as_deref() == Some("history") {
+                panel.refresh_history();
+            }
+        });
+    }
+
+    /// Rescan `.agent-history/` and repopulate the list. Safe to call from the
+    /// GTK main thread at any time.
+    pub fn refresh_history(&self) {
+        while let Some(child) = self.history_list.first_child() {
+            self.history_list.remove(&child);
+        }
+
+        let Some(root) = self.project_root.borrow().clone() else {
+            self.history_list
+                .append(&build_history_placeholder("Open a project to see history."));
+            return;
+        };
+
+        let entries = history::list_history(&root);
+
+        if entries.is_empty() {
+            self.history_list
+                .append(&build_history_placeholder("No past conversations yet."));
+            return;
+        }
+
+        for entry in entries {
+            let row = self.build_history_row(&entry);
+            self.history_list.append(&row);
+        }
+    }
+
+    /// Build one row for the history list. Handles Open + Delete actions.
+    fn build_history_row(&self, entry: &HistoryEntry) -> gtk4::ListBoxRow {
+        let row = gtk4::ListBoxRow::new();
+        row.add_css_class("agent-history-row");
+        row.set_activatable(false);
+        row.set_selectable(false);
+
+        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+        card.add_css_class("agent-history-card");
+        card.set_hexpand(true);
+
+        let title_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+
+        let stamp_icon = gtk4::Image::from_icon_name("document-open-recent-symbolic");
+        stamp_icon.add_css_class("agent-history-icon");
+        title_row.append(&stamp_icon);
+
+        let title = gtk4::Label::new(Some(&history::format_stem(&entry.stem)));
+        title.set_halign(gtk4::Align::Start);
+        title.set_hexpand(true);
+        title.add_css_class("agent-history-title");
+        title_row.append(&title);
+
+        if !entry.resumable {
+            let badge = gtk4::Label::new(Some("Read-only"));
+            badge.add_css_class("agent-history-badge");
+            badge.set_halign(gtk4::Align::End);
+            title_row.append(&badge);
+        }
+
+        card.append(&title_row);
+
+        let preview = gtk4::Label::new(Some(&entry.preview));
+        preview.set_halign(gtk4::Align::Start);
+        preview.set_wrap(true);
+        preview.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+        preview.set_xalign(0.0);
+        preview.set_lines(2);
+        preview.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        preview.add_css_class("agent-history-preview");
+        card.append(&preview);
+
+        let button_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        button_row.set_halign(gtk4::Align::End);
+
+        let open_btn = gtk4::Button::with_label("Open");
+        open_btn.add_css_class("agent-history-open");
+        open_btn.set_sensitive(entry.resumable);
+        open_btn.set_tooltip_text(if entry.resumable {
+            Some("Restore this conversation into the Chat tab")
+        } else {
+            Some("No JSON sidecar — this conversation cannot be resumed")
+        });
+        {
+            let panel = self.clone();
+            let entry = entry.clone();
+            open_btn.connect_clicked(move |_| {
+                panel.open_history_entry(&entry);
+            });
+        }
+        button_row.append(&open_btn);
+
+        let delete_btn = gtk4::Button::from_icon_name("user-trash-symbolic");
+        delete_btn.add_css_class("agent-history-delete");
+        delete_btn.set_tooltip_text(Some("Delete this conversation from disk"));
+        {
+            let panel = self.clone();
+            let entry = entry.clone();
+            delete_btn.connect_clicked(move |btn| {
+                panel.confirm_delete_entry(btn, &entry);
+            });
+        }
+        button_row.append(&delete_btn);
+
+        card.append(&button_row);
+
+        row.set_child(Some(&card));
+        row
+    }
+
+    /// Load a saved conversation into the Chat tab and switch to it.
+    pub fn open_history_entry(&self, entry: &HistoryEntry) {
+        if *self.is_running.borrow() {
+            let err = message_widget::build_error(
+                "Finish or stop the current agent run before opening a past conversation.",
+            );
+            self.messages_box.append(&err);
+            self.stack.set_visible_child_name("chat");
+            return;
+        }
+
+        let ctx = match history::load_context(entry) {
+            Ok(c) => c,
+            Err(e) => {
+                let err = message_widget::build_error(&format!("Failed to load conversation: {e}"));
+                self.messages_box.append(&err);
+                self.stack.set_visible_child_name("chat");
+                return;
+            }
+        };
+
+        // Reset current state before replacing it.
+        self.clear_messages();
+
+        rebuild_messages_from_context(&self.messages_box, &ctx);
+        update_context_label(&self.context_label, &ctx);
+
+        *self
+            .conversation_context
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(ctx);
+        *self.history_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(entry.md_path.clone());
+
+        self.stack.set_visible_child_name("chat");
+        self.input_view.grab_focus();
+    }
+
+    /// Ask the user to confirm deletion, then remove the entry on disk.
+    fn confirm_delete_entry(&self, anchor: &gtk4::Button, entry: &HistoryEntry) {
+        let dialog = gtk4::AlertDialog::builder()
+            .modal(true)
+            .message("Delete this conversation?")
+            .detail("The Markdown transcript and JSON sidecar will be removed from disk. This cannot be undone.")
+            .buttons(["Cancel", "Delete"])
+            .cancel_button(0)
+            .default_button(0)
+            .build();
+
+        let parent = anchor
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok());
+        let panel = self.clone();
+        let entry = entry.clone();
+        dialog.choose(parent.as_ref(), gtk4::gio::Cancellable::NONE, move |res| {
+            if let Ok(1) = res {
+                if let Err(e) = history::delete_entry(&entry) {
+                    tracing::warn!("failed to delete history entry: {e}");
+                }
+                panel.refresh_history();
+            }
         });
     }
 
@@ -1172,6 +1379,19 @@ fn save_conversation_history(
     } else {
         tracing::debug!("saved conversation history to {}", path.display());
     }
+
+    // JSON sidecar is the source of truth for resume; the .md stays human-readable.
+    // Note: images from tool results are already dropped before save, so resumed
+    // sessions don't carry screenshots.
+    let json_path = path.with_extension("json");
+    match context.to_json() {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&json_path, json) {
+                tracing::warn!("failed to save conversation JSON sidecar: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("failed to serialise conversation to JSON: {e}"),
+    }
 }
 
 /// Convert Unix epoch seconds to (year, month, day, hour, minute, second) in UTC.
@@ -1216,4 +1436,154 @@ fn epoch_to_datetime(epoch: u64) -> (u64, u64, u64, u64, u64, u64) {
 /// Whether a year is a leap year.
 fn is_leap_year(year: u64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// Build the History tab page: title row + scrolled list.
+///
+/// The returned `ListBox` is empty; [`AgentPanel::refresh_history`] populates it.
+fn build_history_page() -> (gtk4::Box, gtk4::ListBox) {
+    let page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    page.add_css_class("agent-history-page");
+    page.set_vexpand(true);
+
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    header.add_css_class("agent-header");
+
+    let title = gtk4::Label::new(Some("Past conversations"));
+    title.add_css_class("agent-history-heading");
+    title.set_halign(gtk4::Align::Start);
+    title.set_hexpand(true);
+    header.append(&title);
+
+    page.append(&header);
+
+    let scrolled = gtk4::ScrolledWindow::new();
+    scrolled.add_css_class("agent-history-scroll");
+    scrolled.set_vexpand(true);
+    scrolled.set_hscrollbar_policy(gtk4::PolicyType::Never);
+
+    let list = gtk4::ListBox::new();
+    // `navigation-sidebar` makes the listbox inherit the chrome background
+    // instead of @theme_base_color (which shows as a warm beige in some VS
+    // Code themes). Matches how the left-pane file browser is styled.
+    list.add_css_class("navigation-sidebar");
+    list.add_css_class("agent-history-list");
+    list.set_selection_mode(gtk4::SelectionMode::None);
+    scrolled.set_child(Some(&list));
+
+    page.append(&scrolled);
+
+    (page, list)
+}
+
+/// Build the centred placeholder shown when the history list is empty.
+fn build_history_placeholder(message: &str) -> gtk4::Box {
+    let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    box_.add_css_class("agent-history-placeholder");
+    box_.set_halign(gtk4::Align::Center);
+    box_.set_valign(gtk4::Align::Center);
+    box_.set_vexpand(true);
+    box_.set_margin_top(32);
+    box_.set_margin_bottom(32);
+
+    let icon = gtk4::Image::from_icon_name("document-open-recent-symbolic");
+    icon.add_css_class("agent-history-placeholder-icon");
+    icon.set_pixel_size(48);
+    box_.append(&icon);
+
+    let label = gtk4::Label::new(Some(message));
+    label.add_css_class("dim-label");
+    box_.append(&label);
+
+    box_
+}
+
+/// Update the context-usage badge from a restored conversation context.
+fn update_context_label(label: &gtk4::Label, context: &ConversationContext) {
+    let used_k = context.estimated_tokens() / 1000;
+    let max_k = context.max_tokens() / 1000;
+    label.set_text(&format!("{used_k}k / {max_k}k"));
+}
+
+/// Render the messages of a restored conversation into the messages box.
+///
+/// This is a read-only replay: tool-call cards are populated with their
+/// recorded result but carry no approve/deny buttons because the work has
+/// already been done.
+fn rebuild_messages_from_context(messages_box: &gtk4::Box, context: &ConversationContext) {
+    use rline_ai::chat::types::Role;
+    use std::collections::HashMap;
+
+    // Track tool-call widgets and their tool name by id so we can attach results
+    // and, for terminal tools like `plan_mode_respond` / `attempt_completion`,
+    // mirror the live flow that also shows a markdown-rendered completion card.
+    let mut pending: HashMap<String, (gtk4::Box, String)> = HashMap::new();
+
+    for msg in context.messages() {
+        match msg.role {
+            Role::User => {
+                let text = msg
+                    .content
+                    .as_ref()
+                    .map(|c| c.as_text())
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    continue;
+                }
+                let widget = message_widget::build_user_message(&text);
+                messages_box.append(&widget);
+            }
+            Role::Assistant => {
+                if let Some(content) = &msg.content {
+                    let text = content.as_text();
+                    if !text.trim().is_empty() {
+                        let (container, label) = message_widget::build_ai_message();
+                        let pango = super::markdown::markdown_to_pango(&text);
+                        label.set_markup(&pango);
+                        messages_box.append(&container);
+                    }
+                }
+                if let Some(tool_calls) = &msg.tool_calls {
+                    for tc in tool_calls {
+                        let widget = message_widget::build_tool_call(
+                            &tc.function.name,
+                            &tc.function.arguments,
+                        );
+                        messages_box.append(&widget.container);
+                        pending
+                            .insert(tc.id.clone(), (widget.result_box, tc.function.name.clone()));
+                    }
+                }
+            }
+            Role::Tool => {
+                let Some(call_id) = &msg.tool_call_id else {
+                    continue;
+                };
+                let output = msg
+                    .content
+                    .as_ref()
+                    .map(|c| c.as_text())
+                    .unwrap_or_default();
+                let Some((result_box, tool_name)) = pending.remove(call_id) else {
+                    continue;
+                };
+                // We don't persist success/failure separately; infer a best-effort
+                // flag by looking for a leading "Error" marker in the output.
+                let success = !output.trim_start().starts_with("Error");
+                message_widget::add_tool_result(&result_box, success, &output, None);
+
+                match tool_name.as_str() {
+                    "plan_mode_respond" => {
+                        messages_box.append(&message_widget::build_completion(&output));
+                        messages_box.append(&message_widget::build_plan_mode_prompt());
+                    }
+                    "attempt_completion" => {
+                        messages_box.append(&message_widget::build_completion(&output));
+                    }
+                    _ => {}
+                }
+            }
+            Role::System => {}
+        }
+    }
 }

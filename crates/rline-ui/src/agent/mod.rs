@@ -4,6 +4,7 @@
 //! with an AI coding agent in Plan or Act mode.
 
 pub mod agent_panel;
+pub mod history;
 mod markdown;
 mod message_widget;
 pub mod permission;
