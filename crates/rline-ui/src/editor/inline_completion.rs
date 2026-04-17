@@ -526,8 +526,37 @@ impl InlineCompletion {
                         Ok(text) => {
                             let trimmed = text.trim_end();
                             let truncated = Self::truncate_lines(trimmed, max_lines);
-                            let cleaned =
+                            let dedup =
                                 Self::strip_overlapping_suffix(&truncated, &suffix_for_dedup);
+                            // Strip any leading whitespace from the completion
+                            // that duplicates whitespace already present
+                            // immediately before the cursor — handles both
+                            // mid-line cases ("def " + " foo") and start-of-line
+                            // auto-indent ("    " + "    foo").
+                            let trailing_ws = {
+                                let cursor = ic.buffer.iter_at_mark(&ic.buffer.get_insert());
+                                let mut iter = cursor;
+                                let mut count = 0usize;
+                                while iter.backward_char() {
+                                    let c = iter.char();
+                                    if c == ' ' || c == '\t' {
+                                        count += 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                count
+                            };
+                            let leading_ws = dedup
+                                .chars()
+                                .take_while(|c| *c == ' ' || *c == '\t')
+                                .count();
+                            let strip = trailing_ws.min(leading_ws);
+                            let cleaned = if strip > 0 {
+                                dedup[strip..].to_owned()
+                            } else {
+                                dedup
+                            };
                             if !cleaned.is_empty() {
                                 ic.show_ghost_text(&cleaned);
                             }
