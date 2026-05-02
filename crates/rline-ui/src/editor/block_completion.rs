@@ -226,6 +226,130 @@ fn block_rules(lang_id: &str) -> &'static [BlockRule] {
     }
 }
 
+/// Return the first identifier-like word of a line (after leading whitespace).
+///
+/// Splits on the same predicate used by [`match_block_rule`]: anything that
+/// is not alphanumeric or `_`. Returns `None` if the line is blank or starts
+/// with a separator.
+fn first_word(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let word = trimmed
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()?;
+    if word.is_empty() {
+        None
+    } else {
+        Some(word)
+    }
+}
+
+/// Whether a line is comment-only (first non-whitespace char is `#`).
+fn is_hash_comment_line(line: &str) -> bool {
+    line.trim_start().starts_with('#')
+}
+
+/// Whether a Ruby line opens an `end`-terminated block (first-word keyword or
+/// trailing `do` / `do |…|`).
+fn ruby_line_is_opener(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if ruby_line_ends_with_do(trimmed) {
+        return true;
+    }
+    matches!(
+        first_word(trimmed),
+        Some("if")
+            | Some("unless")
+            | Some("while")
+            | Some("until")
+            | Some("for")
+            | Some("def")
+            | Some("class")
+            | Some("module")
+            | Some("begin")
+            | Some("case")
+    )
+}
+
+/// Returns `true` if the block opener at `opener_line_idx` already has a
+/// matching closer in the buffer.
+///
+/// For keyword-counting styles (Ruby `End`, Bash `BashIf`/`BashLoop`/
+/// `BashCase`), this counts openers vs. closers across the **entire**
+/// buffer. The opener under the cursor is itself one of the openers in the
+/// count. If `openers > closers`, the file is missing a closer (most likely
+/// for the line just typed) and we should insert one; if `openers <=
+/// closers`, the file is already fully closed and we must not add another.
+///
+/// For [`BlockStyle::IndentOnly`] (Python) there is no closing keyword; the
+/// helper looks at the next non-blank, non-comment line after the opener and
+/// reports `true` if it is indented strictly deeper than the opener.
+///
+/// The keyword-counting heuristic is intentionally simple — it does not parse
+/// strings or heredocs, so a literal `"end"` inside a Ruby string can throw
+/// the count off. This matches the level of analysis other editors do for
+/// the same feature and is good enough in practice.
+fn block_already_closed_in_text(style: BlockStyle, text: &str, opener_line_idx: usize) -> bool {
+    match style {
+        BlockStyle::IndentOnly => {
+            let mut lines = text.lines().skip(opener_line_idx);
+            let Some(opener_line) = lines.next() else {
+                return false;
+            };
+            let opener_indent = opener_line.len() - opener_line.trim_start().len();
+            for line in lines {
+                if line.trim().is_empty() || is_hash_comment_line(line) {
+                    continue;
+                }
+                let indent = line.len() - line.trim_start().len();
+                return indent > opener_indent;
+            }
+            false
+        }
+        BlockStyle::End => {
+            let mut balance: i32 = 0;
+            for line in text.lines() {
+                if is_hash_comment_line(line) {
+                    continue;
+                }
+                if ruby_line_is_opener(line) {
+                    balance += 1;
+                }
+                if first_word(line) == Some("end") {
+                    balance -= 1;
+                }
+            }
+            balance <= 0
+        }
+        BlockStyle::BashIf | BlockStyle::BashLoop | BlockStyle::BashCase => {
+            let (openers, closer, companions): (&[&str], &str, &[&str]) = match style {
+                BlockStyle::BashIf => (&["if"], "fi", &[" then", ";then", "; then"]),
+                BlockStyle::BashLoop => {
+                    (&["for", "while", "until"], "done", &[" do", ";do", "; do"])
+                }
+                BlockStyle::BashCase => (&["case"], "esac", &[" in"]),
+                _ => unreachable!(),
+            };
+            let mut balance: i32 = 0;
+            for line in text.lines() {
+                if is_hash_comment_line(line) {
+                    continue;
+                }
+                let trimmed = line.trim_start();
+                let fw = first_word(trimmed);
+                let has_companion = companions.iter().any(|c| trimmed.contains(c));
+
+                if fw.is_some_and(|w| openers.contains(&w)) && !has_companion {
+                    balance += 1;
+                }
+                if fw == Some(closer) {
+                    balance -= 1;
+                }
+            }
+            balance <= 0
+        }
+    }
+}
+
 /// Sentinel rule returned when Ruby `do` (with optional block params) is
 /// detected at the end of a line.
 const RUBY_DO_RULE: BlockRule = BlockRule {
@@ -663,6 +787,17 @@ impl BlockCompletion {
     // Feature 2: Keyword block completion
     // -----------------------------------------------------------------------
 
+    /// Return `true` if the block opener at `line_num` already has a matching
+    /// closer somewhere later in the buffer (or, for indent-only languages,
+    /// already has an indented body below).
+    fn block_already_closed(&self, style: BlockStyle, line_num: i32) -> bool {
+        let start = self.buffer.start_iter();
+        let end = self.buffer.end_iter();
+        let text = self.buffer.text(&start, &end, false).to_string();
+        let opener_idx = line_num.max(0) as usize;
+        block_already_closed_in_text(style, &text, opener_idx)
+    }
+
     /// If the cursor is at the end of a line starting with a block keyword,
     /// insert the closing construct.
     fn try_keyword_completion(&self, cursor: &gtk4::TextIter) -> Option<Propagation> {
@@ -677,6 +812,11 @@ impl BlockCompletion {
         }
 
         let rule = match_block_rule(&lang, &line)?;
+
+        if self.block_already_closed(rule.style, line_num) {
+            return None;
+        }
+
         let indent = get_line_indent(&self.buffer, line_num);
         let tab = make_indent_unit(&self.view);
 
@@ -1123,6 +1263,179 @@ mod tests {
     fn test_no_match_unknown_language() {
         let rule = match_block_rule("json", "if something");
         assert!(rule.is_none());
+    }
+
+    // -- block_already_closed_in_text --
+
+    #[test]
+    fn test_ruby_already_closed_simple() {
+        let text = "if foo\n  body\nend\n";
+        assert!(block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_not_closed_alone() {
+        let text = "if foo\n";
+        assert!(!block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_nested_outer_not_closed() {
+        // Outer if has only one `end` for the inner one — outer remains open.
+        let text = "if outer\n  if inner\n    body\n  end\n";
+        assert!(!block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_nested_outer_closed() {
+        let text = "if outer\n  if inner\n    body\n  end\nend\n";
+        assert!(block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_do_block_already_closed() {
+        let text = "items.each do |item|\n  puts item\nend\n";
+        assert!(block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_postfix_modifier_not_opener() {
+        // `puts x if y` is a postfix modifier, must not count as an opener.
+        let text = "if foo\n  puts x if y\n";
+        assert!(!block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_comment_end_ignored() {
+        // `end` inside a comment line should not be counted.
+        let text = "if foo\n  body\n# end of section\n";
+        assert!(!block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_ruby_new_def_inside_balanced_class() {
+        // User typed a fresh `def blah` inside an existing balanced class.
+        // Total file: openers (class, def existing, def blah) = 3,
+        // closers (end, end) = 2 → openers > closers, must add.
+        let text = "class Foo\n  def existing\n    body\n  end\n  def blah\nend\n";
+        let opener_line = 4; // "  def blah"
+        assert!(!block_already_closed_in_text(
+            BlockStyle::End,
+            text,
+            opener_line
+        ));
+    }
+
+    #[test]
+    fn test_ruby_new_def_at_top_of_balanced_file() {
+        // Adding `def blah` above an already-balanced class; total openers (4)
+        // exceeds closers (2) → must add.
+        let text = "def blah\nclass Foo\n  def existing\n    body\n  end\nend\n";
+        assert!(!block_already_closed_in_text(BlockStyle::End, text, 0));
+    }
+
+    #[test]
+    fn test_bash_if_already_closed() {
+        let text = "if [ -f x ]\n  echo hi\nfi\n";
+        assert!(block_already_closed_in_text(BlockStyle::BashIf, text, 0));
+    }
+
+    #[test]
+    fn test_bash_if_inline_pair_balanced() {
+        // Outer `if foo` not closed; inner one-line `if x; then …; fi` is
+        // balanced (companion present → not counted as opener).
+        let text = "if foo\n  if x; then echo; fi\n  body\n";
+        assert!(!block_already_closed_in_text(BlockStyle::BashIf, text, 0));
+    }
+
+    #[test]
+    fn test_bash_loop_already_closed() {
+        let text = "for i in 1 2 3\n  echo $i\ndone\n";
+        assert!(block_already_closed_in_text(BlockStyle::BashLoop, text, 0));
+    }
+
+    #[test]
+    fn test_bash_case_already_closed() {
+        let text = "case $x\n  a) ;;\nesac\n";
+        assert!(block_already_closed_in_text(BlockStyle::BashCase, text, 0));
+    }
+
+    #[test]
+    fn test_bash_new_if_inside_balanced_file() {
+        // Existing `if/fi` pair plus a freshly typed `if other` — total
+        // openers (2) > closers (1), must add.
+        let text = "if old\n  echo a\nfi\nif other\n";
+        assert!(!block_already_closed_in_text(BlockStyle::BashIf, text, 3));
+    }
+
+    #[test]
+    fn test_python_indent_only_body_present() {
+        let text = "if foo:\n    body()\n";
+        assert!(block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_python_indent_only_no_body() {
+        let text = "if foo:\n";
+        assert!(!block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_python_indent_only_next_line_same_indent() {
+        let text = "if foo:\nbar()\n";
+        assert!(!block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_python_indent_only_skips_blank_and_comment() {
+        let text = "if foo:\n\n# note\n    body()\n";
+        assert!(block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_python_indent_only_indented_opener() {
+        // Opener at indent 4; existing body at indent 8 → already has body.
+        let text = "    if foo:\n        body()\n";
+        assert!(block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            0
+        ));
+    }
+
+    #[test]
+    fn test_python_indent_only_with_preceding_code() {
+        // Opener is at line 2; preceding lines must not affect the decision.
+        let text = "import os\n\nif foo:\n    body()\n";
+        assert!(block_already_closed_in_text(
+            BlockStyle::IndentOnly,
+            text,
+            2
+        ));
+    }
+
+    #[test]
+    fn test_first_word_basic() {
+        assert_eq!(first_word("  if foo"), Some("if"));
+        assert_eq!(first_word("def my_method()"), Some("def"));
+        assert_eq!(first_word(""), None);
+        assert_eq!(first_word("   "), None);
     }
 
     // -- Feature 3: HTML tag helpers --

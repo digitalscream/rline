@@ -1573,6 +1573,7 @@ name = "rline-config"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "rline-lint",
  "serde",
  "serde_json",
  "tempfile",
@@ -1586,6 +1587,17 @@ name = "rline-core"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rline-lint"
+version = "0.1.0"
+dependencies = [
+ "rline-syntax",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -1624,6 +1636,7 @@ dependencies = [
  "rline-ai",
  "rline-config",
  "rline-core",
+ "rline-lint",
  "rline-syntax",
  "serde_json",
  "sourceview5",

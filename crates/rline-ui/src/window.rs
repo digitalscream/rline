@@ -10,6 +10,7 @@ use crate::agent::AgentPanel;
 use crate::editor::SplitContainer;
 use crate::file_browser::FileBrowserPanel;
 use crate::git::GitPanel;
+use crate::lint::ProblemsPanel;
 use crate::menu;
 use crate::search::ProjectSearchPanel;
 use crate::status_bar::StatusBar;
@@ -26,6 +27,7 @@ mod imp {
         pub file_browser: RefCell<Option<FileBrowserPanel>>,
         pub search_panel: RefCell<Option<ProjectSearchPanel>>,
         pub git_panel: RefCell<Option<GitPanel>>,
+        pub problems_panel: RefCell<Option<ProblemsPanel>>,
         pub terminal_pane: RefCell<Option<TerminalPane>>,
         pub status_bar: RefCell<Option<StatusBar>>,
         pub left_stack: RefCell<Option<gtk4::Stack>>,
@@ -149,10 +151,12 @@ impl RlineWindow {
         let file_browser = FileBrowserPanel::new();
         let search_panel = ProjectSearchPanel::new();
         let git_panel = GitPanel::new();
+        let problems_panel = ProblemsPanel::new();
 
         stack.add_titled(file_browser.widget(), Some("files"), "Files");
         stack.add_titled(git_panel.widget(), Some("git"), "Git");
         stack.add_titled(search_panel.widget(), Some("search"), "Search");
+        stack.add_titled(problems_panel.widget(), Some("problems"), "Problems");
 
         let nav_bar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         nav_bar.add_css_class("left-nav");
@@ -163,6 +167,7 @@ impl RlineWindow {
             ("files", "folder-symbolic", "Files"),
             ("git", "media-playlist-consecutive-symbolic", "Git"),
             ("search", "system-search-symbolic", "Search"),
+            ("problems", "dialog-warning-symbolic", "Problems"),
         ];
         let nav_buttons: Vec<(String, gtk4::ToggleButton)> = nav_entries
             .iter()
@@ -281,6 +286,7 @@ impl RlineWindow {
             &terminal_pane,
             &search_panel,
             &git_panel,
+            &problems_panel,
             &status_bar,
             &agent_panel,
         );
@@ -323,6 +329,7 @@ impl RlineWindow {
         imp.file_browser.replace(Some(file_browser.clone()));
         imp.search_panel.replace(Some(search_panel));
         imp.git_panel.replace(Some(git_panel));
+        imp.problems_panel.replace(Some(problems_panel));
         imp.terminal_pane.replace(Some(terminal_pane));
         imp.status_bar.replace(Some(status_bar));
         imp.left_stack.replace(Some(stack));
@@ -341,6 +348,9 @@ impl RlineWindow {
                     }
                     if let Some(ref ap) = *imp.agent_panel.borrow() {
                         ap.set_project_root(&path);
+                    }
+                    if let Some(ref pp) = *imp.problems_panel.borrow() {
+                        pp.set_project_root(&path);
                     }
                     imp.project_root.replace(Some(path.clone()));
                     self.start_git_change_watcher(&path);
@@ -370,6 +380,7 @@ impl RlineWindow {
         terminal_pane: &TerminalPane,
         search_panel: &ProjectSearchPanel,
         git_panel: &GitPanel,
+        problems_panel: &ProblemsPanel,
         status_bar: &StatusBar,
         agent_panel: &AgentPanel,
     ) {
@@ -418,12 +429,21 @@ impl RlineWindow {
             }
         });
 
+        // Problem result opens file at line (same flow as search).
+        let sc_problems = split_container.clone();
+        problems_panel.set_on_open_file_at_line(move |path, line| {
+            if let Err(e) = sc_problems.open_file_at_line(path, line) {
+                tracing::error!("failed to open file at line from problems panel: {e}");
+            }
+        });
+
         // Project root changes update terminal + search + git + status bar + agent + persist
         let tp = terminal_pane.clone();
         let sp = search_panel.clone();
         let gp = git_panel.clone();
         let sb_root = status_bar.clone();
         let ap = agent_panel.clone();
+        let pp = problems_panel.clone();
         file_browser.set_on_project_root_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -434,6 +454,7 @@ impl RlineWindow {
                 tp.set_default_directory(root);
                 sp.set_project_root(root);
                 gp.set_project_root(root);
+                pp.set_project_root(root);
                 sb_root.set_project_root(root);
                 ap.set_project_root(root);
                 window.start_git_change_watcher(root);
@@ -553,16 +574,13 @@ impl RlineWindow {
             ))
             .build();
 
-        // win.save-file (Ctrl+S)
+        // win.save-file (Ctrl+S) — runs format-on-save when configured.
         let action_save = gio::ActionEntry::builder("save-file")
             .activate(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
                 move |_, _, _| {
-                    let sc = window.imp().split_container.borrow().clone();
-                    if let Some(ref sc) = sc {
-                        sc.save_current_tab();
-                    }
+                    window.action_save_with_optional_format();
                 }
             ))
             .build();
@@ -759,6 +777,35 @@ impl RlineWindow {
             ))
             .build();
 
+        // win.format-buffer (Ctrl+Shift+I)
+        let action_format_buffer = gio::ActionEntry::builder("format-buffer")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    window.action_format_buffer();
+                }
+            ))
+            .build();
+
+        // win.show-problems (Ctrl+Shift+M)
+        let action_show_problems = gio::ActionEntry::builder("show-problems")
+            .activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _, _| {
+                    let stack = window.imp().left_stack.borrow().clone();
+                    if let Some(ref stack) = stack {
+                        stack.set_visible_child_name("problems");
+                    }
+                    let pp = window.imp().problems_panel.borrow().clone();
+                    if let Some(pp) = pp {
+                        pp.run_lint();
+                    }
+                }
+            ))
+            .build();
+
         self.add_action_entries([
             action_open,
             action_save,
@@ -777,6 +824,8 @@ impl RlineWindow {
             action_trigger_completion,
             action_focus_agent,
             action_toggle_comments,
+            action_format_buffer,
+            action_show_problems,
         ]);
     }
 
@@ -1008,6 +1057,36 @@ impl RlineWindow {
                 }
             ),
         );
+    }
+
+    /// Save the current tab, optionally running a formatter first.
+    fn action_save_with_optional_format(&self) {
+        let imp = self.imp();
+        let sc = imp.split_container.borrow().clone();
+        let Some(sc) = sc else { return };
+        let tab = match sc.current_editor_tab() {
+            Some(t) => t,
+            None => return,
+        };
+        let settings = rline_config::EditorSettings::load().unwrap_or_default();
+        let registry = crate::lint::lint_worker::registry_from_settings(&settings);
+        crate::lint::format_action::save_with_optional_format(&tab, &registry, &settings);
+    }
+
+    /// Format the current buffer in place using the configured formatter.
+    fn action_format_buffer(&self) {
+        let imp = self.imp();
+        let sc = imp.split_container.borrow().clone();
+        let Some(sc) = sc else { return };
+        let tab = match sc.current_editor_tab() {
+            Some(t) => t,
+            None => return,
+        };
+        let settings = rline_config::EditorSettings::load().unwrap_or_default();
+        let registry = crate::lint::lint_worker::registry_from_settings(&settings);
+        crate::lint::format_action::format_buffer(&tab, &registry, |outcome| {
+            tracing::debug!("format outcome: {outcome:?}");
+        });
     }
 
     fn action_close_tab(&self) {

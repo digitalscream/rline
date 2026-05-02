@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use rline_lint::LintSettings;
+
 use crate::error::ConfigError;
 use crate::keybindings::KeyBindings;
 use crate::paths;
@@ -170,6 +172,11 @@ pub struct EditorSettings {
     /// Configurable keyboard shortcut bindings.
     #[serde(default)]
     pub keybindings: KeyBindings,
+
+    // ── Lint / Format ──
+    /// Per-language formatter and linter configuration.
+    #[serde(default)]
+    pub lint: LintSettings,
 }
 
 impl Default for EditorSettings {
@@ -222,6 +229,7 @@ impl Default for EditorSettings {
             agent_context_length: default_agent_context_length(),
             agent_max_turns: default_agent_max_turns(),
             keybindings: KeyBindings::default(),
+            lint: LintSettings::default(),
         }
     }
 }
@@ -503,6 +511,7 @@ mod tests {
             agent_context_length: 256_000,
             agent_max_turns: 75,
             keybindings: KeyBindings::default(),
+            lint: LintSettings::default(),
         };
 
         let json = serde_json::to_string(&original).expect("serialization should succeed in test");

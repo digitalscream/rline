@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 
-use rline_config::{AgentProvider, EditorSettings};
+use rline_config::{AgentProvider, EditorSettings, LintSettings};
 
 use rline_ai::agent::context::DEFAULT_SYSTEM_PROMPT;
 
@@ -53,6 +53,11 @@ impl SettingsDialog {
         let on_open_file = Rc::new(on_open_file);
         let agent_page = Self::build_agent_page(&settings, &window, &on_open_file);
 
+        // ════════════════════════════════════════════════════════════
+        //  Tab 4 — Lint
+        // ════════════════════════════════════════════════════════════
+        let lint_page = Self::build_lint_page(&settings);
+
         notebook.append_page(
             &editor_page.scrolled,
             Some(&gtk4::Label::new(Some("Editor"))),
@@ -62,6 +67,7 @@ impl SettingsDialog {
             Some(&gtk4::Label::new(Some("Completion"))),
         );
         notebook.append_page(&agent_page.scrolled, Some(&gtk4::Label::new(Some("Agent"))));
+        notebook.append_page(&lint_page.scrolled, Some(&gtk4::Label::new(Some("Lint"))));
 
         // ── Buttons ──
         let button_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -98,6 +104,7 @@ impl SettingsDialog {
             let ep = editor_page.clone();
             let cp = completion_page.clone();
             let ap = agent_page.clone();
+            let lp = lint_page.clone();
             let on_apply = on_apply.clone();
             Rc::new(move || {
                 tracing::info!(
@@ -154,6 +161,7 @@ impl SettingsDialog {
                     agent_command_timeout_secs: ap.command_timeout_spin.value() as u32,
                     agent_context_length: ap.context_length_spin.value() as u32,
                     agent_max_turns: ap.max_turns_spin.value() as u32,
+                    lint: lp.read_lint_settings(&existing.lint),
                     ..existing
                 };
 
@@ -789,6 +797,113 @@ impl SettingsDialog {
         }
     }
 
+    // ── Lint page ──────────────────────────────────────────────────
+
+    fn build_lint_page(settings: &EditorSettings) -> LintPageWidgets {
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_top(16);
+        content.set_margin_bottom(16);
+        content.set_margin_start(16);
+        content.set_margin_end(16);
+
+        // Global format-on-save.
+        let on_save_row = Self::make_row("Format on Save");
+        let on_save_switch = gtk4::Switch::new();
+        on_save_switch.set_active(settings.lint.format_on_save);
+        on_save_switch.set_valign(gtk4::Align::Center);
+        on_save_row.append(&on_save_switch);
+        content.append(&on_save_row);
+
+        let hint = gtk4::Label::new(Some(
+            "Per-language toggles below override the global setting only when explicitly enabled.",
+        ));
+        hint.set_halign(gtk4::Align::Start);
+        hint.set_wrap(true);
+        hint.add_css_class("dim-label");
+        content.append(&hint);
+
+        // Per-language sections.
+        let rust = Self::build_language_section(
+            "Rust (rustfmt + cargo clippy)",
+            settings.lint.rust_format_enabled,
+            settings.lint.rust_lint_enabled,
+        );
+        content.append(&rust.section);
+
+        let python = Self::build_language_section(
+            "Python (ruff)",
+            settings.lint.python_format_enabled,
+            settings.lint.python_lint_enabled,
+        );
+        content.append(&python.section);
+
+        let js = Self::build_language_section(
+            "JavaScript / TypeScript (prettier + eslint)",
+            settings.lint.javascript_format_enabled,
+            settings.lint.javascript_lint_enabled,
+        );
+        content.append(&js.section);
+
+        let ruby = Self::build_language_section(
+            "Ruby (rubocop)",
+            settings.lint.ruby_format_enabled,
+            settings.lint.ruby_lint_enabled,
+        );
+        content.append(&ruby.section);
+
+        let scrolled = gtk4::ScrolledWindow::builder()
+            .child(&content)
+            .vexpand(true)
+            .build();
+
+        LintPageWidgets {
+            scrolled,
+            on_save_switch,
+            rust_format_switch: rust.format_switch,
+            rust_lint_switch: rust.lint_switch,
+            python_format_switch: python.format_switch,
+            python_lint_switch: python.lint_switch,
+            javascript_format_switch: js.format_switch,
+            javascript_lint_switch: js.lint_switch,
+            ruby_format_switch: ruby.format_switch,
+            ruby_lint_switch: ruby.lint_switch,
+        }
+    }
+
+    fn build_language_section(
+        title: &str,
+        format_enabled: bool,
+        lint_enabled: bool,
+    ) -> LanguageSection {
+        let section = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+        section.set_margin_top(8);
+
+        let header = gtk4::Label::new(Some(title));
+        header.set_halign(gtk4::Align::Start);
+        header.add_css_class("heading");
+        section.append(&header);
+
+        let format_row = Self::make_row("Format");
+        let format_switch = gtk4::Switch::new();
+        format_switch.set_active(format_enabled);
+        format_switch.set_valign(gtk4::Align::Center);
+        format_row.append(&format_switch);
+        section.append(&format_row);
+
+        let lint_row = Self::make_row("Lint");
+        let lint_switch = gtk4::Switch::new();
+        lint_switch.set_active(lint_enabled);
+        lint_switch.set_valign(gtk4::Align::Center);
+        lint_row.append(&lint_switch);
+        section.append(&lint_row);
+
+        LanguageSection {
+            section,
+            format_switch,
+            lint_switch,
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────
 
     /// Helper to create a settings row with a left-aligned label.
@@ -1281,4 +1396,58 @@ impl AgentPageWidgets {
             _ => AgentProvider::Anthropic,
         }
     }
+}
+
+/// Holds references to lint-page widgets.
+#[derive(Clone)]
+struct LintPageWidgets {
+    scrolled: gtk4::ScrolledWindow,
+    on_save_switch: gtk4::Switch,
+    rust_format_switch: gtk4::Switch,
+    rust_lint_switch: gtk4::Switch,
+    python_format_switch: gtk4::Switch,
+    python_lint_switch: gtk4::Switch,
+    javascript_format_switch: gtk4::Switch,
+    javascript_lint_switch: gtk4::Switch,
+    ruby_format_switch: gtk4::Switch,
+    ruby_lint_switch: gtk4::Switch,
+}
+
+impl LintPageWidgets {
+    /// Build a fresh [`LintSettings`] from the current widget state. Fields
+    /// the dialog doesn't expose (binary overrides, per-language
+    /// `format_on_save` overrides) are inherited from `existing` so editing
+    /// the JSON by hand stays a viable escape hatch.
+    fn read_lint_settings(&self, existing: &LintSettings) -> LintSettings {
+        LintSettings {
+            format_on_save: self.on_save_switch.is_active(),
+            rust_format_enabled: self.rust_format_switch.is_active(),
+            rust_lint_enabled: self.rust_lint_switch.is_active(),
+            python_format_enabled: self.python_format_switch.is_active(),
+            python_lint_enabled: self.python_lint_switch.is_active(),
+            javascript_format_enabled: self.javascript_format_switch.is_active(),
+            javascript_lint_enabled: self.javascript_lint_switch.is_active(),
+            ruby_format_enabled: self.ruby_format_switch.is_active(),
+            ruby_lint_enabled: self.ruby_lint_switch.is_active(),
+            // Carry over fields the dialog doesn't expose.
+            rust_format_on_save: existing.rust_format_on_save,
+            rust_fmt_binary_override: existing.rust_fmt_binary_override.clone(),
+            rust_cargo_binary_override: existing.rust_cargo_binary_override.clone(),
+            python_format_on_save: existing.python_format_on_save,
+            python_ruff_binary_override: existing.python_ruff_binary_override.clone(),
+            javascript_format_on_save: existing.javascript_format_on_save,
+            prettier_binary_override: existing.prettier_binary_override.clone(),
+            eslint_binary_override: existing.eslint_binary_override.clone(),
+            ruby_format_on_save: existing.ruby_format_on_save,
+            rubocop_binary_override: existing.rubocop_binary_override.clone(),
+        }
+    }
+}
+
+/// A "language" sub-section in the Lint page, returned from
+/// [`SettingsDialog::build_language_section`].
+struct LanguageSection {
+    section: gtk4::Box,
+    format_switch: gtk4::Switch,
+    lint_switch: gtk4::Switch,
 }

@@ -8,6 +8,7 @@ rline-core = { path = "../rline-core" }
 rline-config = { path = "../rline-config" }
 rline-ai = { path = "../rline-ai" }
 rline-syntax = { path = "../rline-syntax" }
+rline-lint = { path = "../rline-lint" }
 gtk4 = { workspace = true }
 pango = "0.21"
 sourceview5 = { workspace = true }

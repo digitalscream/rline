@@ -54,6 +54,10 @@ pub struct KeyBindings {
     pub quit_app: String,
     /// Toggle line comment on selection or current line (Ctrl+/).
     pub toggle_comments: String,
+    /// Format the active editor buffer (Ctrl+Shift+I).
+    pub format_buffer: String,
+    /// Show the Problems panel (Ctrl+Shift+M).
+    pub show_problems: String,
 }
 
 impl Default for KeyBindings {
@@ -74,6 +78,8 @@ impl Default for KeyBindings {
             focus_agent: "<Ctrl><Shift>A".to_owned(),
             quit_app: "<Ctrl>Q".to_owned(),
             toggle_comments: "<Ctrl>slash".to_owned(),
+            format_buffer: "<Ctrl><Shift>I".to_owned(),
+            show_problems: "<Ctrl><Shift>M".to_owned(),
         }
     }
 }
@@ -142,6 +148,14 @@ pub const SHORTCUT_DESCRIPTORS: &[ShortcutDescriptor] = &[
         action: "win.toggle-comments",
         label: "Toggle line comment",
     },
+    ShortcutDescriptor {
+        action: "win.format-buffer",
+        label: "Format current buffer",
+    },
+    ShortcutDescriptor {
+        action: "win.show-problems",
+        label: "Show problems panel",
+    },
 ];
 
 impl KeyBindings {
@@ -165,6 +179,8 @@ impl KeyBindings {
             "win.focus-agent" => Some(&self.focus_agent),
             "win.quit-app" => Some(&self.quit_app),
             "win.toggle-comments" => Some(&self.toggle_comments),
+            "win.format-buffer" => Some(&self.format_buffer),
+            "win.show-problems" => Some(&self.show_problems),
             _ => None,
         }
     }
@@ -189,6 +205,8 @@ impl KeyBindings {
             "win.focus-agent" => self.focus_agent = accel.to_owned(),
             "win.quit-app" => self.quit_app = accel.to_owned(),
             "win.toggle-comments" => self.toggle_comments = accel.to_owned(),
+            "win.format-buffer" => self.format_buffer = accel.to_owned(),
+            "win.show-problems" => self.show_problems = accel.to_owned(),
             _ => return false,
         }
         true
@@ -346,8 +364,8 @@ mod tests {
         }
         assert_eq!(
             SHORTCUT_DESCRIPTORS.len(),
-            15,
-            "should have exactly 15 shortcut descriptors"
+            17,
+            "should have exactly 17 shortcut descriptors"
         );
     }
 
