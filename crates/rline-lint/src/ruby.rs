@@ -39,9 +39,10 @@ impl Formatter for RubocopFormat {
         // lint report followed by a `=` separator line and the corrected
         // source. We strip everything up to and including the separator.
         let path_str = path.display().to_string();
+        let resolved = resolve_binary(&self.binary, path.parent());
         let output = run_command(
             "rubocop",
-            &self.binary,
+            &resolved,
             &["--stdin", &path_str, "-A", "--format=quiet"],
             None,
             Some(source),
@@ -87,9 +88,10 @@ impl Default for Rubocop {
 
 impl LintProvider for Rubocop {
     fn lint_project(&self, root: &Path) -> Result<Vec<Diagnostic>, LintError> {
+        let resolved = resolve_binary(&self.binary, Some(root));
         let output = run_command(
             "rubocop",
-            &self.binary,
+            &resolved,
             &["--format", "json"],
             Some(root),
             None,
@@ -103,9 +105,10 @@ impl LintProvider for Rubocop {
 
     fn lint_file(&self, path: &Path, source: &str) -> Result<Vec<Diagnostic>, LintError> {
         let path_str = path.display().to_string();
+        let resolved = resolve_binary(&self.binary, path.parent());
         let output = run_command(
             "rubocop",
-            &self.binary,
+            &resolved,
             &["--stdin", &path_str, "--format", "json"],
             None,
             Some(source),
@@ -123,6 +126,32 @@ impl LintProvider for Rubocop {
     fn name(&self) -> &'static str {
         "rubocop"
     }
+}
+
+/// Resolve the rubocop binary against a starting directory.
+///
+/// If `binary` is a bare command name (no path separators — e.g. `"rubocop"`),
+/// walk up from `start` looking for a `bin/<binary>` file. This matches the
+/// Bundler binstub convention (`bundle binstubs rubocop` writes
+/// `bin/rubocop`). The first match wins; otherwise the original binary is
+/// returned and PATH lookup proceeds normally.
+///
+/// If `binary` already contains a path separator the caller has been explicit
+/// — return it untouched.
+fn resolve_binary(binary: &str, start: Option<&Path>) -> String {
+    if binary.contains(std::path::MAIN_SEPARATOR) || binary.contains('/') {
+        return binary.to_owned();
+    }
+    let Some(start) = start else {
+        return binary.to_owned();
+    };
+    for ancestor in start.ancestors() {
+        let candidate = ancestor.join("bin").join(binary);
+        if candidate.is_file() {
+            return candidate.display().to_string();
+        }
+    }
+    binary.to_owned()
 }
 
 /// Rubocop's stdin separator. A run of `=` characters on a line of its own
@@ -316,6 +345,33 @@ mod tests {
         assert_eq!(diags[0].severity, Severity::Error);
         assert_eq!(diags[1].severity, Severity::Warning);
         assert_eq!(diags[2].severity, Severity::Info);
+    }
+
+    #[test]
+    fn resolve_binary_prefers_project_binstub() {
+        let root = std::env::temp_dir().join(format!(
+            "rline-rubocop-test-{}-{}",
+            std::process::id(),
+            "binstub"
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin_dir = root.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let stub = bin_dir.join("rubocop");
+        std::fs::write(&stub, "#!/bin/sh\n").expect("write stub");
+        let nested = root.join("lib/sub");
+        std::fs::create_dir_all(&nested).expect("mkdir nested");
+
+        let resolved = resolve_binary("rubocop", Some(&nested));
+        assert_eq!(resolved, stub.display().to_string());
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn resolve_binary_respects_explicit_path() {
+        let resolved = resolve_binary("/usr/bin/rubocop", Some(Path::new("/tmp")));
+        assert_eq!(resolved, "/usr/bin/rubocop");
     }
 
     #[test]

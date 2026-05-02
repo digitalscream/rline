@@ -480,6 +480,16 @@ impl EditorTab {
         }
     }
 
+    /// Suppress (or resume) the inline-completion auto-trigger. Wrap
+    /// programmatic buffer mutations (formatter output, lint autofix, etc.)
+    /// in `set_inline_completion_suppressing(true)` / `(false)` so they are
+    /// not interpreted as user keystrokes.
+    pub fn set_inline_completion_suppressing(&self, suppressed: bool) {
+        if let Some(ref ic) = *self.inline_completion.borrow() {
+            ic.set_suppressing(suppressed);
+        }
+    }
+
     /// Set up tree-sitter highlighting for the file at the given path.
     fn setup_treesitter_highlighting(&self, path: &Path) {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");

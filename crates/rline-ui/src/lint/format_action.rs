@@ -81,6 +81,7 @@ where
     };
 
     let buffer = tab.buffer().clone();
+    let tab_for_apply = tab.clone();
     let (start, end) = buffer.bounds();
     let source = buffer.text(&start, &end, true).to_string();
 
@@ -120,7 +121,13 @@ where
                         }
                         return;
                     }
+                    // Suppress the AI auto-trigger across the programmatic
+                    // buffer replace — this edit came from the formatter, not
+                    // a user keystroke, and must not request a completion.
+                    tab_for_apply.dismiss_ghost_text();
+                    tab_for_apply.set_inline_completion_suppressing(true);
                     apply_formatted_text(&buffer, &formatted, cursor_line, cursor_offset);
+                    tab_for_apply.set_inline_completion_suppressing(false);
                     if let Some(cb) = cb {
                         cb(FormatOutcome::Reformatted);
                     }
